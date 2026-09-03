@@ -1,0 +1,25 @@
+{
+  "_comment": "Copy to data/seed/league_<SEASON>.json (git-ignored) and fill in. owner_name is matched against ESPN owner first/last names and team names, case-insensitive; player_name against ESPN full names. Only current-season pick_trades affect the draft board.",
+  "keepers": [
+    {
+      "owner_name": "OwnerLastName",
+      "player_name": "Player Full Name",
+      "round": 9
+    },
+    {
+      "owner_name": "AnotherOwner",
+      "player_name": "Player Full Name",
+      "round": 7,
+      "tentative": true
+    }
+  ],
+  "pick_trades": [
+    {
+      "season": 2026,
+      "round": 8,
+      "original_owner_name": "OwnerLastName",
+      "owner_name": "AnotherOwner",
+      "note": "for Player X"
+    }
+  ]
+}

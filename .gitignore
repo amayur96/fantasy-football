@@ -1,0 +1,25 @@
+# League data that must never be public (contains league members' names)
+Drafts.pdf
+*.pdf
+.env
+data/*.json
+data/seed/*
+!data/seed/league.example.json
+PLAN.md
+google_credentials.json
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Node
+web/node_modules/
+web/dist/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
