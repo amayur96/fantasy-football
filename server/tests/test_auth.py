@@ -181,7 +181,8 @@ def test_session_cookie_is_httponly(client):
 def test_change_password(client):
     client.post("/api/auth/register", json={"username": "arjun", "password": PW})
     wrong = client.post("/api/auth/password", json={"current_password": "nope-nope-nope", "new_password": "brand-new-pass"})
-    assert wrong.status_code == 401
+    assert wrong.status_code == 400 and wrong.json()["detail"] == "Current password is incorrect."
+    assert client.get("/api/auth/me").status_code == 200  # typo must not kill the session
     assert client.post("/api/auth/password", json={"current_password": PW, "new_password": "brand-new-pass"}).status_code == 204
     client.post("/api/auth/logout")
     assert client.post("/api/auth/login", json={"username": "arjun", "password": PW}).status_code == 401

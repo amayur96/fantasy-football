@@ -103,8 +103,9 @@ def me(user: User = Depends(current_user)) -> PublicUser:
 
 @router.post("/password", status_code=204)
 def change_password(body: PasswordChange, user: User = Depends(current_user), svc: AuthService = Depends(auth)) -> None:
+    # 400, not 401: the session is still valid. The SPA treats every 401 as signed-out.
     if svc.authenticate(user.username, body.current_password) is None:
-        raise HTTPException(status_code=401, detail="Current password is incorrect.")
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
     svc.users.set_password(user, body.new_password)
 
 
