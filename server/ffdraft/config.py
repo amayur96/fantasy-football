@@ -24,6 +24,16 @@ class Settings(BaseSettings):
     google_credentials_file: Path = ROOT / "google_credentials.json"
     sheet_poll_seconds: int = 15
 
+    # Sign-in
+    auth_secret: str = ""  # generated into data/auth_secret when blank
+    session_days: int = 30
+    allow_registration: bool = False  # when False, only admins can add users after the first
+    cookie_secure: bool = False  # set True when serving over HTTPS
+    # Creates this admin on startup when no accounts exist yet. On a public URL this closes the
+    # window where the first stranger to load the site could claim the admin account.
+    bootstrap_username: str = ""
+    bootstrap_password: str = ""
+
     @property
     def data_path(self) -> Path:
         p = self.data_dir if self.data_dir.is_absolute() else ROOT / self.data_dir
@@ -41,6 +51,14 @@ class Settings(BaseSettings):
     @property
     def google_token_path(self) -> Path:
         return self.data_path / "google_token.json"
+
+    @property
+    def users_path(self) -> Path:
+        return self.data_path / "users.json"
+
+    @property
+    def auth_secret_path(self) -> Path:
+        return self.data_path / "auth_secret"
 
 
 def get_settings() -> Settings:

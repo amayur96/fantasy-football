@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet } from "react-router";
-import { MoonIcon, SunIcon } from "lucide-react";
+import { NavLink, Outlet, useNavigate } from "react-router";
+import { LogOutIcon, MoonIcon, SunIcon, UserIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { SyncCard } from "@/components/dashboard/SyncCard";
 import { Toaster } from "@/components/ui/sonner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useAuth, useLogout } from "@/lib/auth";
 import { useSettings } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -69,6 +70,41 @@ function StatusDot() {
   );
 }
 
+function UserMenu() {
+  const { user } = useAuth();
+  const logout = useLogout();
+  const navigate = useNavigate();
+  if (!user) return null;
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button variant="ghost" size="sm" className="gap-1.5 px-2">
+          <UserIcon className="size-4" />
+          <span className="hidden sm:inline">{user.username}</span>
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-52 p-1">
+        <NavLink
+          to="/account"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted"
+        >
+          <UserIcon className="size-4" />
+          Account{user.is_admin && " & members"}
+        </NavLink>
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-muted disabled:opacity-50"
+          disabled={logout.isPending}
+          onClick={() => logout.mutate(undefined, { onSuccess: () => navigate("/login", { replace: true }) })}
+        >
+          <LogOutIcon className="size-4" />
+          Sign out
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 export function AppShell() {
   const { dark, toggle } = useTheme();
   return (
@@ -99,6 +135,7 @@ export function AppShell() {
               <Button variant="ghost" size="icon-sm" onClick={toggle} aria-label="Toggle theme">
                 {dark ? <SunIcon /> : <MoonIcon />}
               </Button>
+              <UserMenu />
             </div>
           </div>
         </header>

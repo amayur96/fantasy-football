@@ -3,6 +3,7 @@ Drafts.pdf
 *.pdf
 .env
 data/*.json
+data/auth_secret
 data/seed/*
 !data/seed/league.example.json
 PLAN.md
