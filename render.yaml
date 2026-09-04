@@ -11,7 +11,7 @@
 # deploys and restarts. A paid instance also never sleeps, so there is no cold start.
 services:
   - type: web
-    name: ff-draft-api
+    name: fantasy-football
     runtime: python
     # Formerly called "Starter". 0.5 CPU / 512 MB — the app peaks around 55 MB with the
     # whole league loaded. A disk requires a paid instance; `free` cannot attach one.
@@ -64,10 +64,10 @@ services:
     staticPublishPath: ./dist
     routes:
       # Must come first: real files win over rewrites, and /api must reach the API.
-      # If Render appends a suffix to the API service's URL, correct this destination.
+      # This is the live API service's URL; Render appends a random suffix to service names.
       - type: rewrite
         source: /api/*
-        destination: https://ff-draft-api.onrender.com/api/*
+        destination: https://fantasy-football-otk9.onrender.com/api/*
       # Client-side routes (/board, /login, /account) are served by the SPA shell.
       - type: rewrite
         source: /*
