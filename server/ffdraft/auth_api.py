@@ -92,8 +92,8 @@ def register(body: Credentials, response: Response, svc: AuthService = Depends(a
 
 
 @router.post("/logout", status_code=204)
-def logout(response: Response) -> None:
-    response.delete_cookie(COOKIE_NAME, path="/")
+def logout(response: Response, svc: AuthService = Depends(auth)) -> None:
+    response.delete_cookie(COOKIE_NAME, secure=svc.cfg.cookie_secure, path="/")
 
 
 @router.get("/me", response_model=PublicUser)

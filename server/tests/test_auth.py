@@ -178,6 +178,20 @@ def test_session_cookie_is_httponly(client):
     assert "httponly" in header and "samesite=lax" in header
 
 
+def test_secure_session_cookie_is_securely_deleted(tmp_path):
+    cfg = Settings(league_id=1, season=2026, data_dir=tmp_path, cookie_secure=True)
+    with TestClient(create_app(AppContext(cfg)), base_url="https://testserver") as client:
+        registered = client.post("/api/auth/register", json={"username": "arjun", "password": PW})
+        assert "secure" in registered.headers["set-cookie"].lower()
+
+        logged_out = client.post("/api/auth/logout")
+        header = logged_out.headers["set-cookie"].lower()
+        assert "ffdraft_session=" in header
+        assert "max-age=0" in header
+        assert "secure" in header
+        assert client.get("/api/auth/me").status_code == 401
+
+
 def test_change_password(client):
     client.post("/api/auth/register", json={"username": "arjun", "password": PW})
     wrong = client.post("/api/auth/password", json={"current_password": "nope-nope-nope", "new_password": "brand-new-pass"})

@@ -70,8 +70,10 @@ export function useLogout() {
     mutationFn: () => apiPost<void>("/auth/logout"),
     onSuccess: () => {
       // Nothing cached under this session should survive into the next one.
-      qc.removeQueries();
       qc.setQueryData(authKeys.me, null);
+      qc.removeQueries({
+        predicate: ({ queryKey }) => queryKey[0] !== authKeys.me[0] || queryKey[1] !== authKeys.me[1],
+      });
     },
   });
 }
