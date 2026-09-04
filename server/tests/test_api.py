@@ -23,6 +23,8 @@ def client(tmp_path, settings, players, drafts, roster):
     cfg = Settings(league_id=1, espn_s2="x", swid="{SWID-3}", season=2026, data_dir=tmp_path)
     app = create_app(AppContext(cfg))
     with TestClient(app) as c:
+        # First registration creates the admin account and sets the session cookie.
+        assert c.post("/api/auth/register", json={"username": "tester", "password": "hunter2hunter2"}).status_code == 200
         yield c
 
 

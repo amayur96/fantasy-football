@@ -7,7 +7,11 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired whenever the server rejects a request as signed-out, so the app can bounce to /login. */
+export const UNAUTHORIZED_EVENT = "ffdraft:unauthorized";
+
 async function handle<T>(res: Response): Promise<T> {
+  if (res.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
   if (res.ok) {
     if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
@@ -37,8 +41,17 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   return handle<T>(res);
 }
 
+export async function apiDelete<T>(path: string): Promise<T> {
+  const res = await fetch(`/api${path}`, { method: "DELETE", headers: { Accept: "application/json" } });
+  return handle<T>(res);
+}
+
 export function isNotSynced(err: unknown): boolean {
   return err instanceof ApiError && err.status === 404;
+}
+
+export function isUnauthorized(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 401;
 }
 
 export function errorMessage(err: unknown): string {

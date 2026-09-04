@@ -1,0 +1,74 @@
+# Render blueprint: https://render.com/docs/blueprint-spec
+# Deploy with "New > Blueprint" in Render and point it at this repo.
+#
+# Two services: a static site builds the React UI (Node is not available in Render's
+# Python runtime, so the UI cannot be built by the API service), and a Python web
+# service runs the API. The static site proxies /api/* to the API, which keeps the
+# browser on one origin so the HttpOnly session cookie stays first-party.
+#
+# The API keeps everything it owns as JSON files, so it runs on a paid instance with a
+# persistent disk: accounts, draft state, setup overrides and the ESPN caches all survive
+# deploys and restarts. A paid instance also never sleeps, so there is no cold start.
+services:
+  - type: web
+    name: ff-draft-api
+    runtime: python
+    # Formerly called "Starter". 0.5 CPU / 512 MB — the app peaks around 55 MB with the
+    # whole league loaded. A disk requires a paid instance; `free` cannot attach one.
+    plan: 0.5c-512mb
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn ffdraft.main:app --app-dir server --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    # Render runs a single instance for any service with a disk, so deploys restart it
+    # rather than rolling. Expect a few seconds of downtime per deploy.
+    disk:
+      name: ffdraft-data
+      mountPath: /var/ffdraft
+      sizeGB: 1
+    envVars:
+      # Python version comes from .python-version (3.12); Render's default is 3.14,
+      # which this lockfile does not target.
+      - key: DATA_DIR
+        value: /var/ffdraft
+      - key: COOKIE_SECURE
+        value: "true"
+      # Generated once by Render and then held steady across deploys.
+      - key: AUTH_SECRET
+        generateValue: true
+      # Creates the admin on first boot only — the disk keeps it thereafter. Without it
+      # the first stranger to load the site would claim the admin account. Safe to clear
+      # from the dashboard once you have signed in.
+      - key: BOOTSTRAP_USERNAME
+        sync: false
+      - key: BOOTSTRAP_PASSWORD
+        sync: false
+      - key: SEASON
+        value: "2026"
+      # League secrets: set these in the Render dashboard, not in the repo.
+      - key: LEAGUE_ID
+        sync: false
+      - key: ESPN_S2
+        sync: false
+      - key: SWID
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEET_TAB
+        sync: false
+
+  - type: web
+    name: ff-draft-web
+    runtime: static
+    rootDir: web
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist
+    routes:
+      # Must come first: real files win over rewrites, and /api must reach the API.
+      # If Render appends a suffix to the API service's URL, correct this destination.
+      - type: rewrite
+        source: /api/*
+        destination: https://ff-draft-api.onrender.com/api/*
+      # Client-side routes (/board, /login, /account) are served by the SPA shell.
+      - type: rewrite
+        source: /*
+        destination: /index.html
