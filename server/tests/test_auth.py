@@ -71,7 +71,49 @@ def test_cannot_delete_last_admin(tmp_path):
         store.delete(admin)
 
 
+def test_store_sees_writes_from_another_process(tmp_path):
+    """make user writes a separate UserStore; the API process must pick that up without restart."""
+    path = tmp_path / "users.json"
+    api = UserStore(path)
+    cli = UserStore(path)
+    assert api.is_empty
+
+    created = cli.create("friend", PW)
+    seen = api.by_username("friend")
+    assert seen is not None and seen.id == created.id
+    assert {u.username for u in api.users} == {"friend"}
+
+    cli.set_password(cli.by_username("friend"), "reset-password")
+    assert verify_password("reset-password", api.by_username("friend").password_hash)
+    assert not verify_password(PW, api.by_username("friend").password_hash)
+
+    cli.delete(cli.by_username("friend"))
+    assert api.by_username("friend") is None
+    assert api.is_empty
+
+
 # ---- routes --------------------------------------------------------------
+def test_running_api_picks_up_cli_account_changes(tmp_path):
+    """make user add/passwd/rm must work against a live API without restarting it."""
+    cfg = Settings(league_id=1, season=2026, data_dir=tmp_path)
+    with TestClient(create_app(AppContext(cfg))) as c:
+        assert c.get("/api/auth/status").json()["users_exist"] is False
+        cli = UserStore(cfg.users_path)
+        cli.create("arjun", PW, is_admin=True)
+        assert c.get("/api/auth/status").json()["users_exist"] is True
+        assert c.post("/api/auth/login", json={"username": "arjun", "password": PW}).status_code == 200
+
+        cli.set_password(cli.by_username("arjun"), "reset-password")
+        c.post("/api/auth/logout")
+        assert c.post("/api/auth/login", json={"username": "arjun", "password": PW}).status_code == 401
+        assert c.post("/api/auth/login", json={"username": "arjun", "password": "reset-password"}).status_code == 200
+
+        cli.create("friend", PW)
+        assert {u["username"] for u in c.get("/api/auth/users").json()} == {"arjun", "friend"}
+        cli.delete(cli.by_username("friend"))
+        assert [u["username"] for u in c.get("/api/auth/users").json()] == ["arjun"]
+
+
 def test_league_routes_require_sign_in(client):
     for path in ("/api/settings", "/api/setup", "/api/players", "/api/draft/state"):
         assert client.get(path).status_code == 401, path

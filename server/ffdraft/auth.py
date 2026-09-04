@@ -94,26 +94,35 @@ class UserStore:
 
     def __init__(self, path: Path):
         self.path = path
-        self.users: list[User] = load_model(path, list[User]) or []
+        self._users: list[User] = []
+
+    def _reload(self) -> list[User]:
+        self._users = load_model(self.path, list[User]) or []
+        return self._users
+
+    @property
+    def users(self) -> list[User]:
+        return self._reload()
 
     def save(self) -> None:
-        write_json(self.path, self.users)
+        write_json(self.path, self._users)
 
     @property
     def is_empty(self) -> bool:
-        return not self.users
+        return not self._reload()
 
     def by_username(self, username: str) -> User | None:
         want = username.strip().lower()
-        return next((u for u in self.users if u.username == want), None)
+        return next((u for u in self._reload() if u.username == want), None)
 
     def by_id(self, user_id: str) -> User | None:
-        return next((u for u in self.users if u.id == user_id), None)
+        return next((u for u in self._reload() if u.id == user_id), None)
 
     def create(self, username: str, password: str, is_admin: bool = False) -> User:
         name = validate_username(username)
         validate_password(password)
-        if self.by_username(name):
+        users = self._reload()
+        if any(u.username == name for u in users):
             raise ValueError(f"Username {name!r} is already taken.")
         user = User(
             id=uuid.uuid4().hex,
@@ -122,19 +131,25 @@ class UserStore:
             is_admin=is_admin,
             created_at=datetime.now(timezone.utc),
         )
-        self.users.append(user)
+        users.append(user)
         self.save()
         return user
 
     def set_password(self, user: User, password: str) -> None:
         validate_password(password)
-        user.password_hash = hash_password(password)
+        new_hash = hash_password(password)
+        target = next((u for u in self._reload() if u.id == user.id), None)
+        if target is None:
+            raise ValueError(f"No account named {user.username!r}.")
+        target.password_hash = new_hash
+        user.password_hash = new_hash
         self.save()
 
     def delete(self, user: User) -> None:
-        if user.is_admin and sum(1 for u in self.users if u.is_admin) == 1:
+        users = self._reload()
+        if user.is_admin and sum(1 for u in users if u.is_admin) == 1:
             raise ValueError("Cannot delete the only admin.")
-        self.users = [u for u in self.users if u.id != user.id]
+        self._users = [u for u in users if u.id != user.id]
         self.save()
 
 
