@@ -7,6 +7,60 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NotReady } from "@/components/NotReady";
 import { useStrategy } from "@/lib/queries";
+import type { RosterTarget } from "@/lib/types";
+
+/** The shape to end the draft with: how many of each position, and how it splits. */
+function RosterShape({ rows, note }: { rows: RosterTarget[]; note: string }) {
+  if (rows.length === 0) return null;
+  const sum = (k: "starters" | "bench" | "total") => rows.reduce((n, r) => n + r[k], 0);
+  return (
+    <section className="space-y-1.5">
+      <h3 className="font-semibold">How many of each to draft</h3>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Pos</TableHead>
+              <TableHead className="text-right">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <span className="cursor-help underline decoration-dotted underline-offset-4">Starters</span>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Dedicated slots plus this position&apos;s share of the flex, so the column adds up to the number of
+                    players you start each week.
+                  </TooltipContent>
+                </Tooltip>
+              </TableHead>
+              <TableHead className="text-right">Bench</TableHead>
+              <TableHead className="text-right">Draft</TableHead>
+              <TableHead>Why</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => (
+              <TableRow key={r.position}>
+                <TableCell className="font-medium">{r.position}</TableCell>
+                <TableCell className="num text-right">{r.starters}</TableCell>
+                <TableCell className="num text-right text-muted-foreground">{r.bench}</TableCell>
+                <TableCell className="num text-right font-semibold">{r.total}</TableCell>
+                <TableCell className="text-xs text-muted-foreground">{r.note}</TableCell>
+              </TableRow>
+            ))}
+            <TableRow className="border-t-2">
+              <TableCell className="font-medium">Total</TableCell>
+              <TableCell className="num text-right font-medium">{sum("starters")}</TableCell>
+              <TableCell className="num text-right font-medium">{sum("bench")}</TableCell>
+              <TableCell className="num text-right font-semibold">{sum("total")}</TableCell>
+              <TableCell />
+            </TableRow>
+          </TableBody>
+        </Table>
+      </div>
+      <p className="text-xs text-muted-foreground">{note}</p>
+    </section>
+  );
+}
 
 /** How to think about this specific league's draft. Every number comes from its own settings and pool. */
 export function StrategyDialog() {
@@ -30,6 +84,8 @@ export function StrategyDialog() {
         {data && (
           <div className="space-y-5 text-sm">
             <p className="rounded-lg border border-primary/30 bg-primary/5 p-3 font-medium">{data.headline}</p>
+
+            <RosterShape rows={data.roster_targets} note={data.roster_note} />
 
             <section className="space-y-1.5">
               <h3 className="text-xs font-semibold text-muted-foreground uppercase">Scarcity by position</h3>

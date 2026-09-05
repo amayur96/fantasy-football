@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { NotReady } from "@/components/NotReady";
+import { AvailabilitySearch } from "@/components/draft/AvailabilitySearch";
 import { DraftTopBar } from "@/components/draft/DraftTopBar";
 import { OverallRankings, type RankSource } from "@/components/draft/OverallRankings";
 import { PlayerCard } from "@/components/draft/PlayerCard";
@@ -54,6 +55,7 @@ export function LiveDraft() {
   return (
     <div className="flex flex-col gap-3 lg:h-[calc(100vh-5.5rem)]">
       <DraftTopBar view={data} />
+      <AvailabilitySearch view={data} onOpenCard={setCardPlayerId} />
       {sheet.error && <p className="text-sm text-destructive">{errorMessage(sheet.error)}</p>}
       <RecommendationsPanel view={data} onOpenCard={setCardPlayerId} />
       <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">

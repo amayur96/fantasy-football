@@ -513,6 +513,16 @@ class StrategyPosition(BaseModel):
     note: str = ""
 
 
+class RosterTarget(BaseModel):
+    """How many of one position to come away with, and how that splits."""
+
+    position: str
+    starters: int  # spots you must fill every week, including this position's share of the flex
+    bench: int
+    total: int
+    note: str = ""
+
+
 class StrategySection(BaseModel):
     title: str
     body: str
@@ -524,5 +534,7 @@ class StrategyGuide(BaseModel):
     headline: str
     positions: list[StrategyPosition] = Field(default_factory=list)
     sections: list[StrategySection] = Field(default_factory=list)
+    roster_targets: list[RosterTarget] = Field(default_factory=list)
+    roster_note: str = ""
     round_plan: list[str] = Field(default_factory=list)
     metrics: list[DetailMetric] = Field(default_factory=list)

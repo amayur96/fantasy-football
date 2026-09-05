@@ -6,7 +6,7 @@ here is computed from the roster slots, scoring, and current rankings, so the nu
 from __future__ import annotations
 
 from .external import is_superflex, scoring_format
-from .models import DetailMetric, LeagueSettings, StrategyGuide, StrategyPosition, StrategySection
+from .models import DetailMetric, LeagueSettings, RosterTarget, StrategyGuide, StrategyPosition, StrategySection
 from .value import FLEX_MAP, Rankings
 
 def _ordinal(n: int) -> str:
@@ -47,6 +47,87 @@ def position_rows(rankings: Rankings, settings: LeagueSettings) -> list[Strategy
     order = {"QB": 0, "RB": 1, "WR": 2, "TE": 3, "D/ST": 4, "K": 5}
     rows.sort(key=lambda r: order.get(r.position, 9))
     return rows
+
+
+def flex_share(settings: LeagueSettings) -> dict[str, int]:
+    """Split each flex slot among the positions that can fill it.
+
+    Tight end is eligible for most flex slots but is almost never the right way to use one,
+    so it only takes a share when nothing else is eligible.
+    """
+    share: dict[str, int] = {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
+    for slot, eligible in FLEX_MAP.items():
+        n = settings.roster_slots.get(slot, 0)
+        if n <= 0:
+            continue
+        pool = [p for p in eligible if p != "TE"] or list(eligible)
+        for i in range(n):
+            share[pool[i % len(pool)]] += 1
+    return share
+
+
+def build_roster_targets(settings: LeagueSettings, rows: list[StrategyPosition], sf: bool) -> tuple[list[RosterTarget], str]:
+    """How many of each position to draft, split into starters and bench.
+
+    Starters come straight from the roster slots plus each position's share of the flex.
+    The bench is whatever the rounds leave over, spent where injuries and byes actually
+    cost you: depth at the positions you start most of.
+    """
+    slots, rounds = settings.roster_slots, settings.rounds
+    by = {r.position: r for r in rows}
+    share = flex_share(settings)
+
+    starters = {
+        "QB": slots.get("QB", 0) + share["QB"],
+        "RB": slots.get("RB", 0) + share["RB"],
+        "WR": slots.get("WR", 0) + share["WR"],
+        "TE": slots.get("TE", 0) + share["TE"],
+    }
+    dst_n = 1 if slots.get("D/ST", 0) > 0 else 0
+    k_n = 1 if slots.get("K", 0) > 0 else 0
+
+    budget = rounds - sum(starters.values()) - dst_n - k_n
+    bench = {"QB": 0, "RB": 0, "WR": 0, "TE": 0}
+    notes = {p: "" for p in bench}
+
+    if budget > 0 and sf and starters["QB"]:
+        bench["QB"] = 1  # a third arm is both insurance and the best trade chip you will hold
+        notes["QB"] = "A third arm is insurance and real trade leverage in superflex."
+    if budget - sum(bench.values()) > 0 and starters["TE"]:
+        bench["TE"] = 1
+        notes["TE"] = "One backup covers the bye; the middle of the position is not worth more."
+
+    left = max(0, budget - sum(bench.values()))
+    weight_rb, weight_wr = starters["RB"], starters["WR"]
+    if weight_rb + weight_wr:
+        add_rb = round(left * weight_rb / (weight_rb + weight_wr))
+        bench["RB"] += add_rb
+        bench["WR"] += left - add_rb
+    notes["RB"] = "Running backs miss the most time, so this is where the bench earns its keep."
+    notes["WR"] = "Receivers fill your flex, so depth here is what covers a bye without a waiver scramble."
+
+    out: list[RosterTarget] = []
+    for pos in ("QB", "RB", "WR", "TE"):
+        if starters[pos] == 0 and bench[pos] == 0:
+            continue
+        out.append(RosterTarget(position=pos, starters=starters[pos], bench=bench[pos],
+                                total=starters[pos] + bench[pos], note=notes[pos]))
+    if dst_n:
+        d = by.get("D/ST")
+        out.append(RosterTarget(position="D/ST", starters=1, bench=0, total=1,
+                                note=f"One, late. The best is only {d.top_vorp:+.0f} over replacement." if d else "One, late."))
+    if k_n:
+        out.append(RosterTarget(position="K", starters=1, bench=0, total=1, note="One, with your final pick."))
+
+    total = sum(r.total for r in out)
+    note = (
+        f"{total} picks across {rounds} rounds. Starters include each position's share of the "
+        f"{sum(settings.roster_slots.get(s, 0) for s in FLEX_MAP)} flex spot(s); the bench is what the "
+        "remaining rounds buy. Treat it as a shape to end up with, not an order to draft in."
+    )
+    if not k_n:
+        note += " This league has no kicker slot, so never spend a pick on one."
+    return out, note
 
 
 def build_guide(rankings: Rankings, settings: LeagueSettings) -> StrategyGuide:
@@ -260,7 +341,9 @@ def build_guide(rankings: Rankings, settings: LeagueSettings) -> StrategyGuide:
                      hint=f"You pick every {T} picks. Multiply that by how many rivals need the position to see whether you can wait."),
     ]
 
+    roster_targets, roster_note = build_roster_targets(settings, rows, sf)
     return StrategyGuide(
         league_summary=league_summary, headline=headline, positions=rows,
-        sections=sections, round_plan=plan, metrics=metrics,
+        sections=sections, roster_targets=roster_targets, roster_note=roster_note,
+        round_plan=plan, metrics=metrics,
     )
