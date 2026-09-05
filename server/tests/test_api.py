@@ -159,3 +159,25 @@ def test_conflicts_survive_a_restart(client, tmp_path):
     c = client.app.state.ctx
     c.load()  # re-read everything from disk, as a fresh boot would
     assert [x.key for x in c.sheet_conflicts.pending] == [key]
+
+
+def test_player_search_returns_drafted_players_too(client):
+    """The Live Draft search labels hits available/drafted, so /players must not hide taken ones."""
+    view = client.get("/api/draft/state").json()
+    target = next(p for p in view["state"]["picks"] if p["player_id"] is None)
+    pool = client.get("/api/players?q=WR Player 2&limit=50").json()
+    pick_me = next(p for p in pool if p["name"] == "WR Player 2")
+
+    client.post("/api/draft/assign", json={"overall": target["overall"], "player_id": pick_me["player_id"]})
+
+    again = client.get("/api/players?q=WR Player 2&limit=50").json()
+    assert any(p["player_id"] == pick_me["player_id"] for p in again), "drafted player vanished from search"
+    # and the draft view says where he went, which is what the row renders
+    view2 = client.get("/api/draft/state").json()
+    assert pick_me["player_id"] in view2["taken_ids"]
+    placed = next(p for p in view2["state"]["picks"] if p["player_id"] == pick_me["player_id"])
+    assert placed["round"] >= 1 and placed["owner_team_id"] in view2["team_names"].keys() | {int(k) for k in view2["team_names"]}
+
+    # ...while ?available=true is still the filtered view used elsewhere
+    avail = client.get("/api/players?q=WR Player 2&available=true&limit=50").json()
+    assert not any(p["player_id"] == pick_me["player_id"] for p in avail)
