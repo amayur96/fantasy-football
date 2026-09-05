@@ -4,6 +4,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { BoardGrid } from "@/components/board/BoardGrid";
+import { ConflictsCard } from "@/components/board/ConflictsCard";
 import { DraftOrderCard } from "@/components/board/DraftOrderCard";
 import { SheetPanel } from "@/components/board/SheetPanel";
 import { NotReady } from "@/components/NotReady";
@@ -64,6 +65,7 @@ export function Board() {
       ) : (
         <>
           <Summary view={board.data} />
+          <ConflictsCard conflicts={board.data.conflicts} />
           {board.data.warnings.length > 0 && (
             <div className="space-y-2">
               {board.data.warnings.map((w, i) => (

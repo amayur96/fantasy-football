@@ -14,6 +14,7 @@ from .models import (
     PickTrade,
     Player,
     SetupOverrides,
+    SheetConflict,
     SheetGrid,
     SheetSyncReport,
     SheetUnmatched,
@@ -40,7 +41,13 @@ def column_order(settings: LeagueSettings, setup: SetupOverrides, board: DraftBo
     return order + missing
 
 
-def board_view(board: DraftBoard, settings: LeagueSettings, setup: SetupOverrides, players_by_id: dict[int, Player]) -> BoardView:
+def board_view(
+    board: DraftBoard,
+    settings: LeagueSettings,
+    setup: SetupOverrides,
+    players_by_id: dict[int, Player],
+    conflicts: list[SheetConflict] | None = None,
+) -> BoardView:
     header_for = {tid: h for h, tid in setup.sheet_columns.items() if tid}
     names = {t.team_id: t.name for t in settings.teams}
     owners = {t.team_id: (t.owner_names[0] if t.owner_names else "") for t in settings.teams}
@@ -64,6 +71,7 @@ def board_view(board: DraftBoard, settings: LeagueSettings, setup: SetupOverride
     return BoardView(
         season=settings.season, my_team_id=settings.my_team_id, rounds=settings.rounds, columns=cols, cells=cells,
         on_the_clock=clock, picks_until_my_turn=board.picks_until_my_turn(), warnings=board.state.warnings,
+        conflicts=conflicts or [],
     )
 
 
@@ -119,8 +127,18 @@ def resolve_columns(grid: SheetGrid, settings: LeagueSettings, setup: SetupOverr
 
 
 def apply_grid(
-    board: DraftBoard, grid: SheetGrid, col_team: dict[int, int], settings: LeagueSettings, setup: SetupOverrides, pool: list[Player],
+    board: DraftBoard, grid: SheetGrid, col_team: dict[int, int], settings: LeagueSettings, setup: SetupOverrides,
+    pool: list[Player], dismissed: dict[str, str] | None = None,
 ) -> SheetSyncReport:
+    """Pull the sheet onto the board.
+
+    Anything the sheet would change that a human typed by hand is held back as a
+    SheetConflict instead of being overwritten; `dismissed` maps a cell key to the sheet
+    text the user has already rejected, so the same disagreement is not raised twice.
+    """
+    dismissed = dismissed or {}
+    names = {t.team_id: t.name for t in settings.teams}
+    by_id = {p.player_id: p for p in pool}
     report = SheetSyncReport(source=grid.source, fetched_at=grid.fetched_at)
     report.unmapped_columns = [h for i, h in enumerate(grid.headers) if i not in col_team and h]
     # colors: header color -> team, learned into setup.team_colors
@@ -173,15 +191,52 @@ def apply_grid(
                 )
                 pick.raw_name, pick.unknown, pick.source = text, True, "sheet"
                 continue
+            # Hold back anything that would overwrite or relocate a hand-typed entry.
+            # Sheet-to-sheet edits still apply, so normal drafting stays quiet.
+            key = f"{tid}:{rnd}"
+            clash: str | None = None
+            if pick.player_id is not None and pick.source == "manual" and pick.player_id != player.player_id:
+                clash = "replace"
+            elif dup is not None and dup.source == "manual":
+                clash = "move"
+            if clash is not None:
+                if dismissed.get(key) != text:  # already decided against this exact sheet value
+                    board_pl = by_id.get(pick.player_id) if pick.player_id else None
+                    report.conflicts.append(SheetConflict(
+                        key=key, kind=clash, overall=pick.overall, round=rnd, original_team_id=tid,
+                        team_name=names.get(tid, str(tid)), header=header,
+                        board_player_id=pick.player_id, board_player_name=board_pl.name if board_pl else None,
+                        sheet_text=text, sheet_player_id=player.player_id, sheet_player_name=player.name,
+                        from_overall=dup.overall if clash == "move" and dup else None,
+                        from_round=dup.round if clash == "move" and dup else None,
+                        detected_at=datetime.now(timezone.utc),
+                    ))
+                continue
             if dup is not None:
-                if dup.source == "manual":
-                    report.moved.append(f"{player.name}: pick {dup.overall} \u2192 {pick.overall} (sheet)")
+                report.moved.append(f"{player.name}: pick {dup.overall} \u2192 {pick.overall} (sheet)")
                 dup.player_id, dup.raw_name, dup.unknown, dup.source, dup.taken_at = None, None, False, None, None
             pick.player_id, pick.raw_name, pick.unknown, pick.taken_at = player.player_id, text, False, datetime.now(timezone.utc)
             pick.source = "keeper" if pick.is_keeper else "sheet"
             report.applied += 1
     board.save()
     return report
+
+
+def apply_conflict(board: DraftBoard, conflict: SheetConflict) -> DraftPick:
+    """Take the sheet's side of a held-back disagreement, and record it as undoable."""
+    pick = _pick_at(board, conflict.original_team_id, conflict.round)
+    board._push(pick)
+    # For a "move", the sheet's player is still sitting in the cell you typed him into.
+    for q in board.picks:
+        if q.player_id == conflict.sheet_player_id and q.overall != pick.overall:
+            if q.is_keeper:
+                raise ConflictError(f"{conflict.sheet_player_name} is a keeper at pick {q.overall}")
+            q.player_id, q.raw_name, q.unknown, q.source, q.taken_at = None, None, False, None, None
+    pick.player_id, pick.raw_name, pick.unknown = conflict.sheet_player_id, conflict.sheet_text, False
+    pick.source = "keeper" if pick.is_keeper else "sheet"
+    pick.taken_at = datetime.now(timezone.utc)
+    board.save()
+    return pick
 
 
 SheetCellLike = object  # typing alias for readability above

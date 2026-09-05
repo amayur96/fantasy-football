@@ -20,6 +20,7 @@ import type {
   SheetColumnsBody,
   SheetStatus,
   SheetSyncReport,
+  ConflictResolveBody,
   SlotBody,
   StrategyGuide,
   SyncReport,
@@ -344,6 +345,20 @@ export function useSheetSync(opts?: { silent?: boolean }) {
     onError: (err) => {
       if (!opts?.silent) toast.error("Sheet pull failed", { description: errorMessage(err) });
     },
+  });
+}
+
+/** Take one side of a held-back sheet disagreement. */
+export function useResolveConflict() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: ConflictResolveBody) => apiPost<BoardView>("/sheet/conflicts/resolve", body),
+    onSuccess: (view, body) => {
+      qc.setQueryData(keys.board, view);
+      invalidateBoardDerived(qc);
+      toast.success(body.choice === "sheet" ? "Used the sheet's pick" : "Kept your pick");
+    },
+    onError: (err) => toast.error("Could not resolve", { description: errorMessage(err) }),
   });
 }
 

@@ -1,7 +1,7 @@
 """FastAPI routes under /api."""
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -14,7 +14,7 @@ from .board import board_view, set_cell
 from . import injury as injury_engine
 from .detail import build_detail
 from .strategy import build_guide
-from .models import BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetStatus, SheetSyncReport, WeekView
+from .models import BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekView
 
 router = APIRouter(prefix="/api")
 
@@ -310,7 +310,7 @@ def get_board(request: Request) -> BoardView:
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None
-    return board_view(c.board, s, c.setup, c.players_by_id)
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
 
 
 class CellBody(BaseModel):
@@ -331,7 +331,7 @@ def post_cell(request: Request, body: CellBody) -> BoardView:
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     c.save_setup()
-    return board_view(c.board, s, c.setup, c.players_by_id)
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
 
 
 @router.get("/sheet/status", response_model=SheetStatus)
@@ -348,6 +348,29 @@ def post_sheet_sync(request: Request) -> SheetSyncReport:
         raise
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"Sheet sync failed: {exc}") from exc
+
+
+@router.get("/sheet/conflicts", response_model=list[SheetConflict])
+def get_sheet_conflicts(request: Request) -> list[SheetConflict]:
+    """Sheet changes held back because they disagree with something typed by hand."""
+    return ctx(request).sheet_conflicts.pending
+
+
+class ConflictResolveBody(BaseModel):
+    key: str
+    choice: Literal["sheet", "board"]
+
+
+@router.post("/sheet/conflicts/resolve", response_model=BoardView)
+def post_resolve_conflict(request: Request, body: ConflictResolveBody) -> BoardView:
+    c = ctx(request)
+    s = c.require_ready()
+    assert c.board is not None
+    try:
+        c.resolve_sheet_conflict(body.key, body.choice)
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
 
 
 class SheetColumnsBody(BaseModel):

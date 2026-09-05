@@ -17,6 +17,8 @@ from .models import (
     RosterEntry,
     SetupOverrides,
     SheetColumn,
+    SheetConflict,
+    SheetConflictState,
     SheetGrid,
     SheetStatus,
     SheetSyncReport,
@@ -43,6 +45,7 @@ class AppContext:
         self.board: DraftBoard | None = None
         self.setup_warnings: list[str] = []
         self.last_sheet: SheetSyncReport | None = None
+        self.sheet_conflicts: SheetConflictState = SheetConflictState()
         self.last_grid: SheetGrid | None = None
         self.history_source: dict[int, str] = {}
         self.roster_source: str = "espn"
@@ -57,6 +60,11 @@ class AppContext:
     @property
     def draft_path(self) -> Path:
         return self.cfg.data_path / "draft_state.json"
+
+    @property
+    def conflicts_path(self) -> Path:
+        """Sheet disagreements awaiting a decision; survives restarts mid-draft."""
+        return self.cfg.data_path / "sheet_conflicts.json"
 
     @property
     def seed_path(self) -> Path:
@@ -85,6 +93,7 @@ class AppContext:
         if sheet_roster:
             self.roster_prev, self.roster_source = sheet_roster, "sheet"
         self.setup = load_model(self.setup_path, SetupOverrides) or SetupOverrides()
+        self.sheet_conflicts = load_model(self.conflicts_path, SheetConflictState) or SheetConflictState()
         self.external = external.load_cached(self.cfg)
         external.apply_to_players(self.players, self.external)
         from .models import SeasonPoints
@@ -269,10 +278,36 @@ class AppContext:
         mapping = resolve_columns(grid, s, self.setup, self.team_by_owner_name)
         # remember the resolved mapping in sheet order so the board can mirror the sheet's columns
         self.setup.sheet_columns = {h: mapping.get(i, self.setup.sheet_columns.get(h, 0)) for i, h in enumerate(grid.headers) if h}
-        report = apply_grid(self.board, grid, mapping, s, self.setup, self.players)
+        report = apply_grid(self.board, grid, mapping, s, self.setup, self.players, self.sheet_conflicts.dismissed)
+        # Each sync re-detects from scratch: a conflict the user resolved simply stops appearing.
+        self.sheet_conflicts.pending = report.conflicts
+        self.save_conflicts()
         self.save_setup()
         self.last_sheet = report
         return report
+
+    def save_conflicts(self) -> None:
+        write_json(self.conflicts_path, self.sheet_conflicts)
+
+    def resolve_sheet_conflict(self, key: str, choice: str) -> SheetConflict:
+        """choice "sheet" applies the spreadsheet's player; "board" keeps what you typed."""
+        from .board import apply_conflict
+
+        hit = next((c for c in self.sheet_conflicts.pending if c.key == key), None)
+        if hit is None:
+            raise LookupError(f"No pending sheet conflict for {key}")
+        if choice not in ("sheet", "board"):
+            raise ValueError('choice must be "sheet" or "board"')
+        assert self.board is not None
+        if choice == "sheet":
+            apply_conflict(self.board, hit)
+            self.sheet_conflicts.dismissed.pop(key, None)
+        else:
+            # Remember the rejection so the next sync does not ask again about this same value.
+            self.sheet_conflicts.dismissed[key] = hit.sheet_text
+        self.sheet_conflicts.pending = [c for c in self.sheet_conflicts.pending if c.key != key]
+        self.save_conflicts()
+        return hit
 
     def set_sheet_columns(self, columns: dict[str, int]) -> None:
         self.setup.sheet_columns = {h: int(t) for h, t in columns.items()}
