@@ -177,10 +177,12 @@ def apply_grid(
                 continue  # already applied
             player = match_player_by_name(text, pool)
             if player is None:
+                report.unmatched.append(SheetUnmatched(round=rnd, header=header, text=text, reason="no ESPN player matches this name"))
+                if pick.player_id is not None and pick.source == "manual":
+                    continue
                 pick.raw_name, pick.unknown, pick.source, pick.taken_at = text, True, "sheet", datetime.now(timezone.utc)
                 if not pick.is_keeper:
                     pick.player_id = None
-                report.unmatched.append(SheetUnmatched(round=rnd, header=header, text=text, reason="no ESPN player matches this name"))
                 continue
             dup = next((q for q in board.picks if q.player_id == player.player_id and q.overall != pick.overall), None)
             # The sheet is the source of truth once it catches up, so it may move a player who was

@@ -145,6 +145,21 @@ def test_sheet_holds_back_rather_than_replacing_a_manual_pick(settings, players,
     assert c.board_player_name == "RB Player 5" and c.sheet_player_name == "RB Player 1"
 
 
+def test_unmatched_sheet_name_does_not_replace_a_manual_pick(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    manual = next(p for p in players if p.name == "RB Player 5")
+    owner2_r2 = next(p for p in board.picks if p.original_team_id == 2 and p.round == 2)
+    board.assign(owner2_r2.overall, manual.player_id)
+
+    rep = apply_grid(board, parse_rows(_rows(), None), {i: i + 1 for i in range(10)}, settings, setup, players)
+
+    assert [u.text for u in rep.unmatched] == ["Nobody Real"]
+    assert owner2_r2.player_id == manual.player_id
+    assert owner2_r2.source == "manual"
+    assert not owner2_r2.unknown
+
+
 def test_sheet_to_sheet_edits_still_apply_without_asking(settings, players, tmp_path):
     """Correcting a typo in the spreadsheet must not interrupt a live draft."""
     setup = SetupOverrides(my_slot=3)
