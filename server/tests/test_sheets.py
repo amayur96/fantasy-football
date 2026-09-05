@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from ffdraft.board import apply_grid, board_view, resolve_columns, set_cell
+from ffdraft.board import apply_conflict, apply_grid, board_view, resolve_columns, set_cell
 from ffdraft.draft import DraftBoard, build_state
 from ffdraft.models import KeeperEntry, SetupOverrides, SheetCell, SheetGrid
 from ffdraft.sheets import parse_rows
@@ -112,8 +112,8 @@ def test_board_columns_follow_the_draft_order(settings, players, tmp_path):
     assert [c.team_id for c in view2.columns] == [5, 3, 1, 2, 4, 6, 7, 8, 9, 10]
 
 
-def test_sheet_moves_a_manual_pick_but_never_a_keeper(settings, players, tmp_path):
-    """The sheet is the source of truth once it catches up; keepers are the exception."""
+def test_sheet_holds_back_rather_than_moving_a_manual_pick(settings, players, tmp_path):
+    """A hand-typed entry is never silently relocated; the disagreement is raised instead."""
     setup = SetupOverrides(my_slot=3)
     board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
     rb1 = next(p for p in players if p.name == "RB Player 1")
@@ -121,13 +121,109 @@ def test_sheet_moves_a_manual_pick_but_never_a_keeper(settings, players, tmp_pat
 
     rows = _rows()  # the sheet has RB Player 1 at Owner1's round 1
     rep = apply_grid(board, parse_rows(rows, None), {i: i + 1 for i in range(10)}, settings, setup, players)
-    assert board.picks[49].player_id is None  # the manual entry was vacated
-    assert any(p.player_id == rb1.player_id and p.round == 1 for p in board.picks)
-    assert any("RB Player 1" in m for m in rep.moved)
 
-    # a keeper is never moved
-    board2 = DraftBoard(build_state(settings, SetupOverrides(my_slot=3, other_keepers=[
+    assert board.picks[49].player_id == rb1.player_id  # still where you typed him
+    assert not any(p.player_id == rb1.player_id and p.round == 1 for p in board.picks)
+    assert rep.moved == []
+    c = next(c for c in rep.conflicts if c.sheet_player_id == rb1.player_id)
+    assert c.kind == "move" and c.from_overall == 50 and c.round == 1
+    assert c.sheet_player_name == "RB Player 1" and c.header == "Owner1"
+
+
+def test_sheet_holds_back_rather_than_replacing_a_manual_pick(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    other = next(p for p in players if p.name == "RB Player 5")
+    owner1_r1 = next(p for p in board.picks if p.original_team_id == 1 and p.round == 1)
+    board.assign(owner1_r1.overall, other.player_id)  # you typed a different player in that slot
+
+    rep = apply_grid(board, parse_rows(_rows(), None), {i: i + 1 for i in range(10)}, settings, setup, players)
+
+    assert owner1_r1.player_id == other.player_id  # untouched
+    c = next(c for c in rep.conflicts if c.key == f"1:{owner1_r1.round}")
+    assert c.kind == "replace"
+    assert c.board_player_name == "RB Player 5" and c.sheet_player_name == "RB Player 1"
+
+
+def test_unmatched_sheet_name_does_not_replace_a_manual_pick(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    manual = next(p for p in players if p.name == "RB Player 5")
+    owner2_r2 = next(p for p in board.picks if p.original_team_id == 2 and p.round == 2)
+    board.assign(owner2_r2.overall, manual.player_id)
+
+    rep = apply_grid(board, parse_rows(_rows(), None), {i: i + 1 for i in range(10)}, settings, setup, players)
+
+    assert [u.text for u in rep.unmatched] == ["Nobody Real"]
+    assert owner2_r2.player_id == manual.player_id
+    assert owner2_r2.source == "manual"
+    assert not owner2_r2.unknown
+
+
+def test_sheet_to_sheet_edits_still_apply_without_asking(settings, players, tmp_path):
+    """Correcting a typo in the spreadsheet must not interrupt a live draft."""
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    cols = {i: i + 1 for i in range(10)}
+    apply_grid(board, parse_rows(_rows(), None), cols, settings, setup, players)
+
+    rows = _rows()
+    rows[1][1] = "RB Player 7"  # the sheet changes its own entry
+    rep = apply_grid(board, parse_rows(rows, None), cols, settings, setup, players)
+
+    assert rep.conflicts == []
+    rb7 = next(p for p in players if p.name == "RB Player 7")
+    assert any(p.player_id == rb7.player_id and p.round == 1 for p in board.picks)
+
+
+def test_dismissed_conflict_is_not_raised_again(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    mine = next(p for p in players if p.name == "RB Player 5")
+    owner1_r1 = next(p for p in board.picks if p.original_team_id == 1 and p.round == 1)
+    board.assign(owner1_r1.overall, mine.player_id)
+    cols = {i: i + 1 for i in range(10)}
+
+    rep = apply_grid(board, parse_rows(_rows(), None), cols, settings, setup, players)
+    key = rep.conflicts[0].key
+    dismissed = {key: rep.conflicts[0].sheet_text}  # you chose "keep mine"
+
+    again = apply_grid(board, parse_rows(_rows(), None), cols, settings, setup, players, dismissed)
+    assert not any(c.key == key for c in again.conflicts)
+    assert owner1_r1.player_id == mine.player_id
+
+    # but if the sheet changes to something else, that is a new disagreement worth raising
+    rows = _rows()
+    rows[1][1] = "RB Player 7"
+    third = apply_grid(board, parse_rows(rows, None), cols, settings, setup, players, dismissed)
+    assert any(c.key == key and c.sheet_player_name == "RB Player 7" for c in third.conflicts)
+
+
+def test_apply_conflict_takes_the_sheets_side(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    board = DraftBoard(build_state(settings, setup), tmp_path / "d.json")
+    rb1 = next(p for p in players if p.name == "RB Player 1")
+    board.assign(50, rb1.player_id)
+    rep = apply_grid(board, parse_rows(_rows(), None), {i: i + 1 for i in range(10)}, settings, setup, players)
+
+    pick = apply_conflict(board, rep.conflicts[0])
+
+    assert pick.player_id == rb1.player_id and pick.round == 1 and pick.source == "sheet"
+    assert board.picks[49].player_id is None  # vacated only once you said so
+    assert board.state.history  # and it is undoable
+
+    board.undo()
+
+    assert board.picks[pick.overall - 1].player_id is None
+    assert board.picks[49].player_id == rb1.player_id
+
+
+def test_keeper_is_never_moved_by_the_sheet(settings, players, tmp_path):
+    setup = SetupOverrides(my_slot=3)
+    rb1 = next(p for p in players if p.name == "RB Player 1")
+    board = DraftBoard(build_state(settings, SetupOverrides(my_slot=3, other_keepers=[
         KeeperEntry(team_id=5, player_id=rb1.player_id, player_name="RB Player 1", round=9)])), tmp_path / "d2.json")
-    rep2 = apply_grid(board2, parse_rows(rows, None), {i: i + 1 for i in range(10)}, settings, setup, players)
-    assert any("keeper" in u.reason for u in rep2.unmatched)
-    assert any(p.player_id == rb1.player_id and p.is_keeper for p in board2.picks)
+    rep = apply_grid(board, parse_rows(_rows(), None), {i: i + 1 for i in range(10)}, settings, setup, players)
+    assert any("keeper" in u.reason for u in rep.unmatched)
+    assert any(p.player_id == rb1.player_id and p.is_keeper for p in board.picks)
+    assert rep.conflicts == []  # a keeper clash is reported, not a decision to make

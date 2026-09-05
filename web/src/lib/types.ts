@@ -345,6 +345,30 @@ export interface BoardCell {
   on_clock: boolean;
 }
 
+/** A sheet change held back because it disagrees with something typed by hand. */
+export interface SheetConflict {
+  key: string;
+  kind: "replace" | "move";
+  overall: number;
+  round: number;
+  original_team_id: number;
+  team_name: string;
+  header: string;
+  board_player_id: number | null;
+  board_player_name: string | null;
+  sheet_text: string;
+  sheet_player_id: number;
+  sheet_player_name: string;
+  from_overall: number | null;
+  from_round: number | null;
+  detected_at: string;
+}
+
+export interface ConflictResolveBody {
+  key: string;
+  choice: "sheet" | "board";
+}
+
 export interface BoardView {
   season: number;
   my_team_id: number;
@@ -354,6 +378,7 @@ export interface BoardView {
   on_the_clock: DraftPick | null;
   picks_until_my_turn: number | null;
   warnings: string[];
+  conflicts: SheetConflict[];
 }
 
 export interface CellBody {
@@ -378,6 +403,8 @@ export interface SheetSyncReport {
   cleared: number;
   owner_changes: number;
   unmatched: SheetUnmatched[];
+  moved: string[];
+  conflicts: SheetConflict[];
   unmapped_columns: string[];
   error: string | null;
 }

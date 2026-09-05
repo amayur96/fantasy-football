@@ -188,6 +188,7 @@ class DraftState(BaseModel):
     provisional_order: bool = False
     picks: list[DraftPick]
     history: list[DraftPick] = Field(default_factory=list)  # undo stack: each pick as it was before a change
+    history_batch_sizes: list[int] = Field(default_factory=list)  # snapshots belonging to each undoable action
     warnings: list[str] = Field(default_factory=list)
     updated_at: datetime
 
@@ -255,6 +256,37 @@ class SheetUnmatched(BaseModel):
     reason: str
 
 
+class SheetConflict(BaseModel):
+    """A sheet change held back because it would overwrite something a human typed.
+
+    Only raised when the sheet disagrees with a *manual* entry; sheet-to-sheet edits
+    still apply on their own, so a normal draft stays quiet.
+    """
+
+    key: str  # f"{original_team_id}:{round}" - stable across board rebuilds
+    kind: Literal["replace", "move"]
+    overall: int
+    round: int
+    original_team_id: int
+    team_name: str = ""
+    header: str = ""  # the sheet column this came from
+    board_player_id: int | None = None
+    board_player_name: str | None = None
+    sheet_text: str
+    sheet_player_id: int
+    sheet_player_name: str
+    from_overall: int | None = None  # "move": where the sheet's player sits right now
+    from_round: int | None = None
+    detected_at: datetime
+
+
+class SheetConflictState(BaseModel):
+    """Persisted so a conflict survives a restart and is not re-raised once decided."""
+
+    pending: list[SheetConflict] = Field(default_factory=list)
+    dismissed: dict[str, str] = Field(default_factory=dict)  # key -> sheet text the user rejected
+
+
 class SheetSyncReport(BaseModel):
     source: str
     fetched_at: datetime
@@ -263,6 +295,7 @@ class SheetSyncReport(BaseModel):
     owner_changes: int = 0
     unmatched: list[SheetUnmatched] = Field(default_factory=list)
     moved: list[str] = Field(default_factory=list)  # players the sheet relocated from a manual entry
+    conflicts: list[SheetConflict] = Field(default_factory=list)  # held back, awaiting your decision
     unmapped_columns: list[str] = Field(default_factory=list)
     error: str | None = None
 
@@ -318,6 +351,7 @@ class BoardView(BaseModel):
     on_the_clock: DraftPick | None = None
     picks_until_my_turn: int | None = None
     warnings: list[str] = Field(default_factory=list)
+    conflicts: list[SheetConflict] = Field(default_factory=list)
 
 
 # ---- external expert rankings ----------------------------------------------

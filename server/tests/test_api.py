@@ -87,3 +87,75 @@ def test_player_detail_card(client, monkeypatch):
     assert any("2025 240 pts in 16 games" in n for n in d["notes"])
     assert any("Missed time in 2024" in n for n in d["notes"])
     assert client.get("/api/player/999999").status_code == 404
+
+
+# ---- sheet conflicts -----------------------------------------------------
+def _seed_conflict(client):
+    """Type a pick by hand, then hand the board a sheet that disagrees with it."""
+    from ffdraft.board import apply_grid
+    from ffdraft.sheets import parse_rows
+
+    c = client.app.state.ctx
+    board, s = c.board, c.settings
+    mine = next(p for p in c.players if p.name == "WR Player 20")
+    target = next(p for p in board.picks if p.original_team_id == 1 and p.round == 1)
+    board.assign(target.overall, mine.player_id)
+
+    headers = [f"Owner{i}" for i in range(1, 11)]
+    rows = [["", *headers]] + [[f"Round {r}"] + [""] * 10 for r in range(1, 19)]
+    rows[1][1] = "WR Player 30"  # sheet disagrees with what you typed
+    report = apply_grid(board, parse_rows(rows, None), {i: i + 1 for i in range(10)}, s, c.setup, c.players, c.sheet_conflicts.dismissed)
+    c.sheet_conflicts.pending = report.conflicts
+    c.save_conflicts()
+    return target, mine
+
+
+def test_conflicts_surface_on_the_board(client):
+    target, mine = _seed_conflict(client)
+    conflicts = client.get("/api/sheet/conflicts").json()
+    assert len(conflicts) == 1
+    c = conflicts[0]
+    assert c["kind"] == "replace" and c["board_player_name"] == "WR Player 20" and c["sheet_player_name"] == "WR Player 30"
+    # and the board view carries them so the UI can flag the cell
+    assert [x["key"] for x in client.get("/api/board").json()["conflicts"]] == [c["key"]]
+    # nothing was overwritten while it waits
+    cell = next(x for x in client.get("/api/board").json()["cells"] if x["overall"] == target.overall)
+    assert cell["player_id"] == mine.player_id
+
+
+def test_resolving_in_favour_of_the_sheet_updates_the_board(client):
+    target, mine = _seed_conflict(client)
+    key = client.get("/api/sheet/conflicts").json()[0]["key"]
+    r = client.post("/api/sheet/conflicts/resolve", json={"key": key, "choice": "sheet"})
+    assert r.status_code == 200
+    cell = next(x for x in r.json()["cells"] if x["overall"] == target.overall)
+    assert cell["player_name"] == "WR Player 30" and cell["source"] == "sheet"
+    assert r.json()["conflicts"] == [] and client.get("/api/sheet/conflicts").json() == []
+
+
+def test_resolving_in_favour_of_the_board_keeps_your_pick(client):
+    target, mine = _seed_conflict(client)
+    key = client.get("/api/sheet/conflicts").json()[0]["key"]
+    r = client.post("/api/sheet/conflicts/resolve", json={"key": key, "choice": "board"})
+    assert r.status_code == 200
+    cell = next(x for x in r.json()["cells"] if x["overall"] == target.overall)
+    assert cell["player_id"] == mine.player_id
+    assert client.get("/api/sheet/conflicts").json() == []
+    # the decision is remembered, so the next sync does not ask again
+    assert client.app.state.ctx.sheet_conflicts.dismissed[key] == "WR Player 30"
+
+
+def test_resolve_rejects_unknown_key_and_bad_choice(client):
+    _seed_conflict(client)
+    key = client.get("/api/sheet/conflicts").json()[0]["key"]
+    assert client.post("/api/sheet/conflicts/resolve", json={"key": "99:1", "choice": "sheet"}).status_code == 404
+    assert client.post("/api/sheet/conflicts/resolve", json={"key": key, "choice": "whatever"}).status_code == 422
+
+
+def test_conflicts_survive_a_restart(client, tmp_path):
+    """Mid-draft the process can restart; pending decisions must not vanish."""
+    _seed_conflict(client)
+    key = client.get("/api/sheet/conflicts").json()[0]["key"]
+    c = client.app.state.ctx
+    c.load()  # re-read everything from disk, as a fresh boot would
+    assert [x.key for x in c.sheet_conflicts.pending] == [key]
