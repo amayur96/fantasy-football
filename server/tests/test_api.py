@@ -243,3 +243,33 @@ def test_refused_keeper_change_is_also_rolled_back(client):
     r = client.post("/api/setup/keepers", json={"other_keepers": [], "my_keeper": None})
     assert r.status_code == 409
     assert client.get("/api/setup").json()["setup"]["other_keepers"] == before
+
+
+def test_setup_reports_the_order_the_board_is_actually_on(client):
+    """The card needs this to notice a saved order the board never picked up."""
+    first = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    client.post("/api/setup/slot", json={"my_slot": None, "slot_order": first, "order_confirmed": True})
+    s = client.get("/api/setup").json()
+    assert s["board_slot_order"] == first == s["slot_order"]  # agreeing on a clean board
+
+    # a refused change keeps them agreeing (the rollback), and force makes them agree again
+    _record_a_pick(client)
+    wanted = list(range(1, 11))
+    assert client.post("/api/setup/slot", json={"my_slot": None, "slot_order": wanted, "order_confirmed": True}).status_code == 409
+    s = client.get("/api/setup").json()
+    assert s["board_slot_order"] == s["slot_order"] == first
+
+    client.post("/api/setup/slot?force=true", json={"my_slot": None, "slot_order": wanted, "order_confirmed": True})
+    s = client.get("/api/setup").json()
+    assert s["board_slot_order"] == s["slot_order"] == wanted
+
+
+def test_board_order_exposes_a_stale_board(client):
+    """Reproduce the state a pre-fix save left behind: setup ahead of the board."""
+    c = client.app.state.ctx
+    _record_a_pick(client)
+    c.setup.slot_order = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]  # written without a rebuild, as the old code did
+    c.save_setup()
+    s = client.get("/api/setup").json()
+    assert s["slot_order"] == [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    assert s["board_slot_order"] != s["slot_order"]  # the card can now see the divergence

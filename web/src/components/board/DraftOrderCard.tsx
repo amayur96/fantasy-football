@@ -28,6 +28,10 @@ export function DraftOrderCard() {
   if (!setup.data) return null;
 
   const teams = new Map(setup.data.teams.map((t) => [t.team_id, t]));
+  // The board can be running an older order than the one saved here, if a rebuild was
+  // refused. Without this the Save button stays disabled and there is no way to apply it.
+  const boardOrder = setup.data.board_slot_order;
+  const outOfSync = !!boardOrder && (boardOrder.length !== order.length || boardOrder.some((id, i) => id !== order[i]));
   const myId = setup.data.my_team_id;
   const confirmed = setup.data.setup.slot_order !== null || setup.data.setup.order_confirmed;
 
@@ -116,7 +120,7 @@ export function DraftOrderCard() {
         <div className="flex items-center gap-2">
           <Button
             size="sm"
-            disabled={!dirty || save.isPending}
+            disabled={(!dirty && !outOfSync) || save.isPending}
             onClick={() =>
               save.mutate(
                 { my_slot: null, slot_order: order, order_confirmed: true },
@@ -140,6 +144,18 @@ export function DraftOrderCard() {
           )}
           <span className="text-xs text-muted-foreground">You pick {mySlot || "?"} of {order.length}</span>
         </div>
+        {outOfSync && !needsForce && !dirty && (
+          <Alert>
+            <TriangleAlertIcon />
+            <AlertTitle>The board is on a different order</AlertTitle>
+            <AlertDescription>
+              <p>
+                This order is saved, but the board is still built on the previous one, so the columns and whose pick is
+                on the clock are wrong. Save again to apply it to the board.
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
         {needsForce && (
           <Alert variant="destructive">
             <TriangleAlertIcon />
