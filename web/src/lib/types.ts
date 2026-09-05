@@ -565,6 +565,14 @@ export interface StrategyPosition {
   note: string;
 }
 
+export interface RosterTarget {
+  position: string;
+  starters: number;
+  bench: number;
+  total: number;
+  note: string;
+}
+
 export interface StrategySection {
   title: string;
   body: string;
@@ -576,6 +584,8 @@ export interface StrategyGuide {
   headline: string;
   positions: StrategyPosition[];
   sections: StrategySection[];
+  roster_targets: RosterTarget[];
+  roster_note: string;
   round_plan: string[];
   metrics: DetailMetric[];
 }
