@@ -188,6 +188,7 @@ class DraftState(BaseModel):
     provisional_order: bool = False
     picks: list[DraftPick]
     history: list[DraftPick] = Field(default_factory=list)  # undo stack: each pick as it was before a change
+    history_batch_sizes: list[int] = Field(default_factory=list)  # snapshots belonging to each undoable action
     warnings: list[str] = Field(default_factory=list)
     updated_at: datetime
 

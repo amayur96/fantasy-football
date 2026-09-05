@@ -197,6 +197,11 @@ def test_apply_conflict_takes_the_sheets_side(settings, players, tmp_path):
     assert board.picks[49].player_id is None  # vacated only once you said so
     assert board.state.history  # and it is undoable
 
+    board.undo()
+
+    assert board.picks[pick.overall - 1].player_id is None
+    assert board.picks[49].player_id == rb1.player_id
+
 
 def test_keeper_is_never_moved_by_the_sheet(settings, players, tmp_path):
     setup = SetupOverrides(my_slot=3)

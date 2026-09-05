@@ -142,7 +142,12 @@ class DraftBoard:
     # ---- mutations --------------------------------------------------------
     def _push(self, pick: DraftPick) -> None:
         """Remember a pick exactly as it was, so undo can put it back."""
-        self.state.history.append(pick.model_copy(deep=True))
+        self._push_many(pick)
+
+    def _push_many(self, *picks: DraftPick) -> None:
+        """Remember all picks changed by one action as a single undo step."""
+        self.state.history.extend(pick.model_copy(deep=True) for pick in picks)
+        self.state.history_batch_sizes.append(len(picks))
 
     def pick_at(self, overall: int) -> DraftPick:
         if overall < 1 or overall > len(self.picks):
@@ -195,13 +200,17 @@ class DraftBoard:
         return slot
 
     def undo(self) -> DraftPick | None:
-        """Restore the last changed pick to exactly what it was."""
+        """Restore every pick changed by the last action to exactly what it was."""
         if not self.state.history:
             return None
-        snap = self.state.history.pop()
-        self.picks[snap.overall - 1] = snap
+        # Old saved boards have no batch sizes, so their history remains one-pick-per-undo.
+        batch_size = self.state.history_batch_sizes.pop() if self.state.history_batch_sizes else 1
+        snapshots = self.state.history[-batch_size:]
+        del self.state.history[-batch_size:]
+        for snap in snapshots:
+            self.picks[snap.overall - 1] = snap
         self.save()
-        return snap
+        return snapshots[0]
 
     def save(self) -> None:
         self.state.updated_at = datetime.now(timezone.utc)

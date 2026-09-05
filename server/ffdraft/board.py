@@ -225,13 +225,17 @@ def apply_grid(
 def apply_conflict(board: DraftBoard, conflict: SheetConflict) -> DraftPick:
     """Take the sheet's side of a held-back disagreement, and record it as undoable."""
     pick = _pick_at(board, conflict.original_team_id, conflict.round)
-    board._push(pick)
     # For a "move", the sheet's player is still sitting in the cell you typed him into.
-    for q in board.picks:
-        if q.player_id == conflict.sheet_player_id and q.overall != pick.overall:
-            if q.is_keeper:
-                raise ConflictError(f"{conflict.sheet_player_name} is a keeper at pick {q.overall}")
-            q.player_id, q.raw_name, q.unknown, q.source, q.taken_at = None, None, False, None, None
+    sources = [
+        q for q in board.picks
+        if q.player_id == conflict.sheet_player_id and q.overall != pick.overall
+    ]
+    keeper = next((q for q in sources if q.is_keeper), None)
+    if keeper is not None:
+        raise ConflictError(f"{conflict.sheet_player_name} is a keeper at pick {keeper.overall}")
+    board._push_many(pick, *sources)
+    for source in sources:
+        source.player_id, source.raw_name, source.unknown, source.source, source.taken_at = None, None, False, None, None
     pick.player_id, pick.raw_name, pick.unknown = conflict.sheet_player_id, conflict.sheet_text, False
     pick.source = "keeper" if pick.is_keeper else "sheet"
     pick.taken_at = datetime.now(timezone.utc)
