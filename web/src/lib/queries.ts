@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { apiGet, apiPost, errorMessage, isNotSynced } from "./api";
+import { ApiError, apiGet, apiPost, errorMessage, isNotSynced } from "./api";
 import type {
   AssignBody,
   BoardView,
@@ -230,7 +230,12 @@ function useSetupMutation<TVars>(fn: (vars: TVars) => Promise<SetupResponse>, la
       void qc.invalidateQueries({ queryKey: keys.settings });
       toast.success(label);
     },
-    onError: (err) => toast.error(`${label} failed`, { description: errorMessage(err) }),
+    // A 409 means "this would discard recorded picks". The caller shows an inline confirm
+    // offering the way through, so a red toast on top of it is just noise.
+    onError: (err) => {
+      if (err instanceof ApiError && err.status === 409) return;
+      toast.error(`${label} failed`, { description: errorMessage(err) });
+    },
   });
 }
 
@@ -239,7 +244,11 @@ export function useSaveKeepers() {
 }
 
 export function useSaveSlot() {
-  return useSetupMutation((body: SlotBody) => apiPost<SetupResponse>("/setup/slot", body), "Draft slot saved");
+  return useSetupMutation(
+    ({ force, ...body }: SlotBody & { force?: boolean }) =>
+      apiPost<SetupResponse>(`/setup/slot${force ? "?force=true" : ""}`, body),
+    "Draft order saved",
+  );
 }
 
 export function useKeeperCostOverride() {

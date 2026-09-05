@@ -1,7 +1,7 @@
 """FastAPI routes under /api."""
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -144,23 +144,23 @@ class KeepersBody(BaseModel):
 
 
 @router.post("/setup/keepers")
-def post_keepers(request: Request, body: KeepersBody) -> Any:
+def post_keepers(request: Request, body: KeepersBody, force: bool = False) -> Any:
     c = ctx(request)
     c.require_ready()
-    c.setup.other_keepers = [c.resolve_keeper(k) for k in body.other_keepers]
-    c.setup.my_keeper = c.resolve_keeper(body.my_keeper) if body.my_keeper else None
-    c.save_setup()
-    _rebuild(c)
+
+    def apply() -> None:
+        c.setup.other_keepers = [c.resolve_keeper(k) for k in body.other_keepers]
+        c.setup.my_keeper = c.resolve_keeper(body.my_keeper) if body.my_keeper else None
+
+    _apply_setup(c, apply, force)
     return get_setup(request)
 
 
 @router.post("/setup/pick-trades")
-def post_pick_trades(request: Request, trades: list[PickTrade] = Body(...)) -> Any:
+def post_pick_trades(request: Request, trades: list[PickTrade] = Body(...), force: bool = False) -> Any:
     c = ctx(request)
     c.require_ready()
-    c.setup.pick_trades = [c.resolve_trade(t) for t in trades]
-    c.save_setup()
-    _rebuild(c)
+    _apply_setup(c, lambda: setattr(c.setup, "pick_trades", [c.resolve_trade(t) for t in trades]), force)
     return get_setup(request)
 
 
@@ -171,15 +171,18 @@ class SlotBody(BaseModel):
 
 
 @router.post("/setup/slot")
-def post_slot(request: Request, body: SlotBody) -> Any:
+def post_slot(request: Request, body: SlotBody, force: bool = False) -> Any:
+    """force=true rebuilds the board even when picks are recorded, discarding them."""
     c = ctx(request)
     c.require_ready()
-    c.setup.my_slot = body.my_slot
-    c.setup.slot_order = body.slot_order
-    if body.order_confirmed is not None:
-        c.setup.order_confirmed = body.order_confirmed
-    c.save_setup()
-    _rebuild(c)
+
+    def apply() -> None:
+        c.setup.my_slot = body.my_slot
+        c.setup.slot_order = body.slot_order
+        if body.order_confirmed is not None:
+            c.setup.order_confirmed = body.order_confirmed
+
+    _apply_setup(c, apply, force)
     return get_setup(request)
 
 
@@ -200,11 +203,21 @@ def post_override(request: Request, body: OverrideBody) -> Any:
     return get_keeper_options(request)
 
 
-def _rebuild(c: AppContext) -> None:
+def _apply_setup(c: AppContext, mutate: "Callable[[], None]", force: bool = False) -> None:
+    """Change setup, rebuild the board, and only then write to disk.
+
+    Saving first and rebuilding second used to leave setup.json holding a new draft order
+    while the live board still ran the old one - the save looked rejected but had half
+    happened. Nothing is persisted now unless the rebuild is allowed.
+    """
+    before = c.setup.model_copy(deep=True)
+    mutate()
     try:
-        c.rebuild_board()
+        c.rebuild_board(force=force)
     except ConflictError as exc:
+        c.setup = before
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    c.save_setup()
 
 
 @router.get("/draft/state", response_model=DraftView)

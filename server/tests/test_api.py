@@ -181,3 +181,65 @@ def test_player_search_returns_drafted_players_too(client):
     # ...while ?available=true is still the filtered view used elsewhere
     avail = client.get("/api/players?q=WR Player 2&available=true&limit=50").json()
     assert not any(p["player_id"] == pick_me["player_id"] for p in avail)
+
+
+# ---- setup writes are all-or-nothing -------------------------------------
+def _record_a_pick(client):
+    """Put one player on the board by hand. The top of the pool may already be a keeper,
+    so pick the best player nobody holds and an overall that is actually empty."""
+    view = client.get("/api/draft/state").json()
+    taken = set(view["taken_ids"])
+    player = next(p for p in client.get("/api/players?limit=200").json() if p["player_id"] not in taken)
+    overall = next(p["overall"] for p in view["state"]["picks"] if p["player_id"] is None and not p["unknown"])
+    r = client.post("/api/draft/assign", json={"overall": overall, "player_id": player["player_id"]})
+    assert r.status_code == 200, r.json()
+    assert r.json()["can_undo"] is True  # a recorded pick is what the 409 guard protects
+    return overall
+
+
+def test_refused_order_change_leaves_setup_and_board_agreeing(client):
+    """A 409 must change nothing. Persisting the order but not rebuilding left the card
+    showing one order while the board ran another."""
+    first = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    assert client.post("/api/setup/slot", json={"my_slot": None, "slot_order": first, "order_confirmed": True}).status_code == 200
+    _record_a_pick(client)
+
+    r = client.post("/api/setup/slot", json={"my_slot": None, "slot_order": list(range(1, 11)), "order_confirmed": True})
+    assert r.status_code == 409
+
+    setup = client.get("/api/setup").json()
+    state = client.get("/api/draft/state").json()
+    assert setup["setup"]["slot_order"] == first          # not half-written
+    assert state["state"]["slot_order"] == first          # and the board still matches it
+    assert setup["slot_order"] == state["state"]["slot_order"]
+    assert state["can_undo"] is True  # the pick it protected survives
+
+
+def test_force_rebuilds_the_board_and_applies_the_order(client):
+    overall = _record_a_pick(client)
+    wanted = list(range(1, 11))
+    r = client.post("/api/setup/slot?force=true", json={"my_slot": None, "slot_order": wanted, "order_confirmed": True})
+    assert r.status_code == 200
+
+    setup = client.get("/api/setup").json()
+    state = client.get("/api/draft/state").json()
+    assert setup["setup"]["slot_order"] == wanted
+    assert state["state"]["slot_order"] == wanted
+    assert state["can_undo"] is False  # rebuilding clears the board
+    assert next(p for p in state["state"]["picks"] if p["overall"] == overall)["player_id"] is None
+
+
+def test_order_change_still_works_on_a_clean_board(client):
+    wanted = [5, 4, 3, 2, 1, 10, 9, 8, 7, 6]
+    r = client.post("/api/setup/slot", json={"my_slot": None, "slot_order": wanted, "order_confirmed": True})
+    assert r.status_code == 200 and r.json()["slot_order"] == wanted
+    assert client.get("/api/draft/state").json()["state"]["slot_order"] == wanted
+
+
+def test_refused_keeper_change_is_also_rolled_back(client):
+    """The same save-then-rebuild bug applied to keepers and pick trades."""
+    before = client.get("/api/setup").json()["setup"]["other_keepers"]
+    _record_a_pick(client)
+    r = client.post("/api/setup/keepers", json={"other_keepers": [], "my_keeper": None})
+    assert r.status_code == 409
+    assert client.get("/api/setup").json()["setup"]["other_keepers"] == before

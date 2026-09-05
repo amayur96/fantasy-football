@@ -1,8 +1,10 @@
 import { useState, type CSSProperties } from "react";
-import { ChevronDownIcon, ChevronUpIcon, GripVerticalIcon, RotateCcwIcon, SaveIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronUpIcon, GripVerticalIcon, RotateCcwIcon, SaveIcon, TriangleAlertIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { CollapsibleCard } from "@/components/CollapsibleCard";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { ApiError } from "@/lib/api";
 import { useSaveSlot, useSetup } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +19,8 @@ export function DraftOrderCard() {
   const [seen, setSeen] = useState<number[] | undefined>(undefined);
   const [dirty, setDirty] = useState(false);
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  // Set when the server refuses because recorded picks would be discarded.
+  const [needsForce, setNeedsForce] = useState<string | null>(null);
   if (server && seen !== server) {
     setSeen(server);
     if (!dirty) setOrder(server);
@@ -114,7 +118,17 @@ export function DraftOrderCard() {
             size="sm"
             disabled={!dirty || save.isPending}
             onClick={() =>
-              save.mutate({ my_slot: null, slot_order: order, order_confirmed: true }, { onSuccess: () => setDirty(false) })
+              save.mutate(
+                { my_slot: null, slot_order: order, order_confirmed: true },
+                {
+                  onSuccess: () => {
+                    setDirty(false);
+                    setNeedsForce(null);
+                  },
+                  onError: (err) =>
+                    setNeedsForce(err instanceof ApiError && err.status === 409 ? err.message : null),
+                },
+              )
             }
           >
             <SaveIcon /> Save order
@@ -126,6 +140,41 @@ export function DraftOrderCard() {
           )}
           <span className="text-xs text-muted-foreground">You pick {mySlot || "?"} of {order.length}</span>
         </div>
+        {needsForce && (
+          <Alert variant="destructive">
+            <TriangleAlertIcon />
+            <AlertTitle>Order not saved</AlertTitle>
+            <AlertDescription className="grid gap-2">
+              <p>
+                {needsForce} Changing who picks where moves every pick number, so the board has to be rebuilt and the
+                picks already recorded on it cannot be kept.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  disabled={save.isPending}
+                  onClick={() =>
+                    save.mutate(
+                      { my_slot: null, slot_order: order, order_confirmed: true, force: true },
+                      {
+                        onSuccess: () => {
+                          setDirty(false);
+                          setNeedsForce(null);
+                        },
+                      },
+                    )
+                  }
+                >
+                  Clear the board and save
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setNeedsForce(null)}>
+                  Keep the picks
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
     </CollapsibleCard>
   );
 }

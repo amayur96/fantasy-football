@@ -282,6 +282,8 @@ export interface KeepersBody {
 }
 
 export interface SlotBody {
+  /** Rebuild the board even though picks are recorded, discarding them. */
+  force?: boolean;
   order_confirmed?: boolean | null;
   my_slot: number | null;
   slot_order: number[] | null;
