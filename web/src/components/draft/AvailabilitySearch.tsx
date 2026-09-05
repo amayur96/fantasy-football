@@ -53,7 +53,7 @@ export function AvailabilitySearch({ view, onOpenCard }: Props) {
   const showPanel = open && debounced.length > 0;
 
   return (
-    <div ref={box} className="relative shrink-0">
+    <div ref={box} className="relative w-56 shrink-0">
       <SearchIcon className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
       <Input
         value={q}
@@ -62,7 +62,7 @@ export function AvailabilitySearch({ view, onOpenCard }: Props) {
           setOpen(true);
         }}
         onFocus={() => setOpen(true)}
-        placeholder="Is he still available? Search any player…"
+        placeholder="Search"
         aria-label="Search for a player to see if he is available or drafted"
         className="h-8 pr-8 pl-8 text-sm"
       />
@@ -81,7 +81,7 @@ export function AvailabilitySearch({ view, onOpenCard }: Props) {
       )}
 
       {showPanel && (
-        <div className="absolute inset-x-0 top-9 z-30 overflow-hidden rounded-lg border bg-popover shadow-lg">
+        <div className="absolute top-9 left-0 z-30 w-[26rem] max-w-[calc(100vw-2rem)] overflow-hidden rounded-lg border bg-popover shadow-lg">
           {results.length === 0 ? (
             <p className="px-3 py-2.5 text-sm text-muted-foreground">
               {isFetching ? "Searching…" : `No player matches “${debounced}”.`}
