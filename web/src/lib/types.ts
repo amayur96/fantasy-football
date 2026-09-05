@@ -270,6 +270,8 @@ export interface SetupResponse {
   espn_order_present: boolean;
   setup: SetupOverrides;
   slot_order: number[];
+  /** What the live board is built on; lags slot_order when a rebuild was refused. */
+  board_slot_order: number[] | null;
   provisional: boolean;
   warnings: string[];
   teams: TeamInfo[];

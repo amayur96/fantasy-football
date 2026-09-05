@@ -135,7 +135,14 @@ def get_setup(request: Request) -> dict[str, Any]:
 
     order, provisional = resolve_slot_order(s, c.setup)
     espn_order = bool(s.draft_order) and sorted(s.draft_order or []) == sorted(t.team_id for t in s.teams)
-    return {"setup": c.setup, "slot_order": order, "provisional": provisional, "espn_order_present": espn_order, "warnings": c.setup_warnings + (c.board.state.warnings if c.board else []), "teams": s.teams, "my_team_id": s.my_team_id}
+    return {
+        "setup": c.setup, "slot_order": order, "provisional": provisional, "espn_order_present": espn_order,
+        # What the live board is actually built on. It can lag the saved order when a rebuild
+        # was refused, and the card needs to see that to offer a way to apply it.
+        "board_slot_order": list(c.board.state.slot_order) if c.board else None,
+        "warnings": c.setup_warnings + (c.board.state.warnings if c.board else []),
+        "teams": s.teams, "my_team_id": s.my_team_id,
+    }
 
 
 class KeepersBody(BaseModel):
