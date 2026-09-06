@@ -11,10 +11,11 @@ from . import recommend as rec_engine
 from .context import AppContext
 from .draft import ConflictError, DraftBoard, open_slots
 from .board import board_view, set_cell
+from .grade import grade_board
 from . import injury as injury_engine
 from .detail import build_detail
 from .strategy import build_guide
-from .models import BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekView
+from .models import BoardGrades, BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekView
 
 router = APIRouter(prefix="/api")
 
@@ -352,6 +353,15 @@ def post_cell(request: Request, body: CellBody) -> BoardView:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     c.save_setup()
     return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
+
+
+@router.get("/board/grades", response_model=BoardGrades)
+def get_board_grades(request: Request) -> BoardGrades:
+    """Score every team's draft 0-100 against what their pick slots were worth."""
+    c = ctx(request)
+    s = c.require_ready()
+    assert c.board is not None and c.rankings is not None
+    return grade_board(c.board, s, c.setup, c.rankings)
 
 
 @router.get("/sheet/status", response_model=SheetStatus)

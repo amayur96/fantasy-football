@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { BoardGrid } from "@/components/board/BoardGrid";
 import { ConflictsCard } from "@/components/board/ConflictsCard";
 import { DraftOrderCard } from "@/components/board/DraftOrderCard";
+import { GradesDialog } from "@/components/board/GradesDialog";
 import { SheetPanel } from "@/components/board/SheetPanel";
 import { NotReady } from "@/components/NotReady";
 import { useBoard, useSettings } from "@/lib/queries";
@@ -64,7 +65,10 @@ export function Board() {
         <Skeleton className="h-96 w-full" />
       ) : (
         <>
-          <Summary view={board.data} />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Summary view={board.data} />
+            <GradesDialog />
+          </div>
           <ConflictsCard conflicts={board.data.conflicts} />
           {board.data.warnings.length > 0 && (
             <div className="space-y-2">
