@@ -498,6 +498,50 @@ class PlayerDetail(BaseModel):
     injury: InjuryReport | None = None
 
 
+# ---- draft grades ----------------------------------------------------------
+
+
+class GradePick(BaseModel):
+    overall: int
+    round: int
+    player_id: int
+    player_name: str
+    position: str
+    value: float  # points over replacement
+    expected: float  # what that pick slot typically returns
+    edge: float  # value - expected
+
+
+class TeamGrade(BaseModel):
+    team_id: int
+    name: str
+    owner: str = ""
+    is_me: bool = False
+    rank: int = 0
+    score: int = 0  # 0-100
+    grade: str = ""  # letter form of score
+    picks_made: int = 0
+    total_value: float = 0.0
+    expected_value: float = 0.0
+    edge: float = 0.0
+    edge_per_pick: float = 0.0
+    starters_filled: int = 0
+    starter_slots: int = 0
+    open_starters: dict[str, int] = Field(default_factory=dict)
+    best: GradePick | None = None
+    worst: GradePick | None = None
+    reasons: list[str] = Field(default_factory=list)
+
+
+class BoardGrades(BaseModel):
+    graded_picks: int = 0
+    total_picks: int = 0
+    complete: bool = False
+    teams: list[TeamGrade] = Field(default_factory=list)
+    note: str = ""
+    method: str = ""
+
+
 # ---- draft strategy guide ----------------------------------------------------------
 
 

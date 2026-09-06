@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import { ApiError, apiGet, apiPost, errorMessage, isNotSynced } from "./api";
 import type {
   AssignBody,
+  BoardGrades,
   BoardView,
   CellBody,
   CheatSheetResponse,
@@ -37,6 +38,7 @@ export const keys = {
   draftState: ["draftState"] as const,
   recommendations: ["recommendations"] as const,
   board: ["board"] as const,
+  grades: ["boardGrades"] as const,
   sheetStatus: ["sheetStatus"] as const,
   week: (week?: number) => ["week", week ?? "current"] as const,
   strategy: ["strategy"] as const,
@@ -312,6 +314,7 @@ export function useBoard() {
 
 /** Everything derived from the draft board that a cell edit or sheet pull can change. */
 function invalidateBoardDerived(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: keys.grades });
   void qc.invalidateQueries({ queryKey: keys.draftState });
   void qc.invalidateQueries({ queryKey: keys.recommendations });
   void qc.invalidateQueries({ queryKey: ["players"] });
@@ -327,6 +330,17 @@ export function useSetCell() {
       invalidateBoardDerived(qc);
     },
     onError: (err) => toast.error("Could not update cell", { description: errorMessage(err) }),
+  });
+}
+
+/** Draft grades. Fetched only while the dialog is open — it recomputes the whole board. */
+export function useBoardGrades(enabled: boolean) {
+  return useQuery({
+    queryKey: keys.grades,
+    queryFn: () => apiGet<BoardGrades>("/board/grades"),
+    enabled,
+    retry: retryUnlessNotSynced,
+    staleTime: 10_000,
   });
 }
 

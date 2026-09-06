@@ -385,6 +385,47 @@ export interface BoardView {
   conflicts: SheetConflict[];
 }
 
+export interface GradePick {
+  overall: number;
+  round: number;
+  player_id: number;
+  player_name: string;
+  position: Position;
+  value: number;
+  expected: number;
+  edge: number;
+}
+
+export interface TeamGrade {
+  team_id: number;
+  name: string;
+  owner: string;
+  is_me: boolean;
+  rank: number;
+  score: number;
+  grade: string;
+  picks_made: number;
+  total_value: number;
+  expected_value: number;
+  edge: number;
+  edge_per_pick: number;
+  starters_filled: number;
+  starter_slots: number;
+  open_starters: Record<string, number>;
+  best: GradePick | null;
+  worst: GradePick | null;
+  reasons: string[];
+}
+
+export interface BoardGrades {
+  graded_picks: number;
+  total_picks: number;
+  complete: boolean;
+  teams: TeamGrade[];
+  note: string;
+  method: string;
+}
+
 export interface CellBody {
   original_team_id: number;
   round: number;
