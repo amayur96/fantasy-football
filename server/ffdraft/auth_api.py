@@ -97,6 +97,7 @@ class MailInfo(BaseModel):
     sender: str = ""
     reply_to: str = ""
     sandbox: bool = False  # Resend's onboarding sender: delivers only to the account owner's address
+    link_base: str = ""  # what invite links start with; "" when it cannot be determined (APP_URL missing)
 
 
 class LeagueTeam(BaseModel):
@@ -243,7 +244,16 @@ def set_user_team(user_id: str, body: TeamChoice, request: Request, _: User = De
 
 
 def _base_url(request: Request, svc: AuthService) -> str:
-    return (svc.cfg.app_url or str(request.base_url)).rstrip("/")
+    """Where invite links point. APP_URL when set; otherwise this host, which is only right when the
+    API also serves the web build (the single-service deploy). On Render the site and API are split,
+    so a link built from the API's host lands on a JSON 404 — refuse rather than email that."""
+    if svc.cfg.app_url:
+        return svc.cfg.app_url.rstrip("/")
+    from .main import WEB_DIST
+
+    if not (WEB_DIST / "index.html").exists():
+        raise HTTPException(status_code=400, detail="APP_URL is not set, so invite links would point at the API instead of the site. Set APP_URL to the site's address (e.g. https://your-site.onrender.com) and try again.")
+    return str(request.base_url).rstrip("/")
 
 
 def _invite_view(inv: Invite, request: Request, svc: AuthService) -> InviteView:
@@ -274,11 +284,15 @@ def _email_invite(inv: Invite, request: Request, svc: AuthService) -> None:
 
 
 @router.get("/mail", response_model=MailInfo)
-def mail_info(_: User = Depends(current_admin), svc: AuthService = Depends(auth)) -> MailInfo:
+def mail_info(request: Request, _: User = Depends(current_admin), svc: AuthService = Depends(auth)) -> MailInfo:
     """How invite emails go out, so the admin can see it and send themselves one first."""
     cfg = svc.cfg
     provider = "resend" if cfg.resend_api_key else "smtp" if cfg.smtp_host else ""
-    return MailInfo(configured=cfg.mail_configured, provider=provider, sender=cfg.sender, reply_to=cfg.mail_reply_to, sandbox="resend.dev" in cfg.sender.lower())
+    try:
+        base = _base_url(request, svc)
+    except HTTPException:
+        base = ""
+    return MailInfo(configured=cfg.mail_configured, provider=provider, sender=cfg.sender, reply_to=cfg.mail_reply_to, sandbox="resend.dev" in cfg.sender.lower(), link_base=base)
 
 
 @router.get("/invites", response_model=list[InviteView])
@@ -297,6 +311,7 @@ def create_invite(body: InviteRequest, request: Request, me: User = Depends(curr
         raise HTTPException(status_code=409, detail=f"{names[body.team_id]} is already managed by {holder.username}. Reassign or remove that account first.")
     if not svc.cfg.mail_configured:
         raise HTTPException(status_code=400, detail="Email is not set up on the server yet (MAIL_FROM plus RESEND_API_KEY). Invites are sent by email only.")
+    _base_url(request, svc)  # a link we cannot build correctly must not leave an invite behind
     try:
         inv = svc.invites.create(body.team_id, created_by=me.id, email=body.email, days=svc.cfg.invite_days)
     except ValueError as exc:
@@ -314,6 +329,7 @@ def test_invite(body: TestInviteRequest, request: Request, me: User = Depends(cu
         raise HTTPException(status_code=400, detail="Your account has no team yet, so there is nothing to test with.")
     if not svc.cfg.mail_configured:
         raise HTTPException(status_code=400, detail="Email is not set up on the server yet (MAIL_FROM plus RESEND_API_KEY). Invites are sent by email only.")
+    _base_url(request, svc)
     try:
         inv = svc.invites.create(team, created_by=me.id, email=body.email, days=svc.cfg.invite_days, test=True)
     except ValueError as exc:

@@ -240,6 +240,16 @@ function Invites() {
                   )}
                   .
                 </p>
+                {mail.data.link_base ? (
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Links will start with <span className="font-mono">{mail.data.link_base}/join</span>.
+                  </p>
+                ) : (
+                  <p className="mt-1 text-xs text-rose-700 dark:text-rose-300">
+                    <code className="rounded bg-muted px-1">APP_URL</code> is not set, so links would point at the API and fail. Set it to this site's
+                    address ({window.location.origin}) in the server environment.
+                  </p>
+                )}
                 {mail.data.sandbox && (
                   <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
                     That is Resend's sandbox sender: it only delivers to the address your Resend account is registered under. Verify a domain in

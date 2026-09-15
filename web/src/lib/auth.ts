@@ -49,6 +49,8 @@ export interface MailInfo {
   reply_to: string;
   /** Resend's sandbox sender: it only delivers to the address the Resend account is registered under. */
   sandbox: boolean;
+  /** What invite links start with; empty when APP_URL is missing on a split deploy. */
+  link_base: string;
 }
 
 export interface InviteInfo {

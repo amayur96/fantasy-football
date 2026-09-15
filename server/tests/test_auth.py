@@ -413,7 +413,7 @@ def test_expired_invite_is_refused(league_client):
 
 def test_mail_info_tells_the_admin_how_invites_go_out(league_client):
     info = league_client.get("/api/auth/mail").json()
-    assert info == {"configured": True, "provider": "resend", "sender": "FF <ff@test.co>", "reply_to": "", "sandbox": False}
+    assert info == {"configured": True, "provider": "resend", "sender": "FF <ff@test.co>", "reply_to": "", "sandbox": False, "link_base": "https://ff.example.com"}
     league_client.app.state.auth.cfg.mail_from = "Aljux Fantasy <onboarding@resend.dev>"
     assert league_client.get("/api/auth/mail").json()["sandbox"] is True
     friend = _fresh(league_client)
@@ -465,3 +465,23 @@ def test_test_invite_does_not_disturb_a_real_pending_invite(league_client):
     league_client.post("/api/auth/invites/test", json={"email": "commish@example.com"})
     statuses = {(i["team_id"], i["test"]): i["status"] for i in league_client.get("/api/auth/invites").json()}
     assert statuses[(5, False)] == "pending" and statuses[(3, True)] == "pending"
+
+
+def test_invites_refuse_to_send_links_that_would_hit_the_api(league_client, monkeypatch):
+    """Split deploy (site + API) with APP_URL unset: a link built from the API host is a JSON 404."""
+    from pathlib import Path
+
+    from ffdraft import main
+
+    league_client.app.state.auth.cfg.app_url = ""
+    monkeypatch.setattr(main, "WEB_DIST", Path("/nowhere/dist"))
+    r = league_client.post("/api/auth/invites", json={"team_id": 5, "email": "five@example.com"})
+    assert r.status_code == 400 and "APP_URL" in r.json()["detail"]
+    assert league_client.get("/api/auth/invites").json() == []  # nothing created
+    assert league_client.get("/api/auth/mail").json()["link_base"] == ""
+    # single-service deploy: the API serves the site, so its own host is right
+    dist = Path(league_client.app.state.ctx.cfg.data_path) / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<!doctype html>")
+    monkeypatch.setattr(main, "WEB_DIST", dist)
+    assert league_client.get("/api/auth/mail").json()["link_base"] == "http://testserver"
