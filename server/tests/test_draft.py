@@ -102,3 +102,12 @@ def test_undo_restores_a_cleared_keeper(settings, tmp_path):
     board.undo()
     restored = board.picks[keeper.overall - 1]
     assert restored.is_keeper and restored.player_id == 900
+
+
+def test_board_answers_for_any_team(settings, setup):
+    from ffdraft.draft import build_state, DraftBoard
+    board = DraftBoard(build_state(settings, setup), None)  # type: ignore[arg-type]
+    assert board.my_next_pick().owner_team_id == settings.my_team_id
+    assert board.my_next_pick(7).owner_team_id == 7
+    assert board.picks_until_my_turn(7) != board.picks_until_my_turn(settings.my_team_id)
+    assert board.my_roster_ids(7) == []

@@ -12,9 +12,9 @@ function deltaText(m: LineupMove): string {
 function MoveBlock({ move }: { move: LineupMove }) {
   const up = move.delta >= 0;
   return (
-    <li className="space-y-1 rounded-lg border bg-card px-3 py-2">
+    <li className="space-y-2.5 rounded-lg border bg-card px-4 py-3.5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="font-semibold">{move.headline}</span>
+        <span className="text-base font-semibold">{move.headline}</span>
         <span
           className={cn(
             "num inline-flex h-5 items-center rounded-full px-2 text-xs font-medium",
@@ -24,8 +24,7 @@ function MoveBlock({ move }: { move: LineupMove }) {
           {deltaText(move)}
         </span>
       </div>
-      {move.quant && <p className="text-sm">{move.quant}</p>}
-      {move.qual && <p className="text-sm text-muted-foreground">{move.qual}</p>}
+      <p className="max-w-prose text-sm leading-7 text-foreground">{move.why}</p>
     </li>
   );
 }

@@ -27,8 +27,36 @@ make user CMD="passwd friend"        # reset a forgotten password
 make user CMD="rm friend"            # revoke access
 ```
 
-Optional `.env` settings: `ALLOW_REGISTRATION=true` lets anyone sign themselves up, `SESSION_DAYS` (default 30)
-sets how long a login lasts, and `COOKIE_SECURE=true` is required if you ever serve this over HTTPS.
+## Letting league-mates in
+
+Your ESPN cookie reads the *whole* league, so nobody else needs one — and nobody picks a team. From
+**Account → Invite your league**, click **Invite** on a team, type that person's email, and the app
+emails them a one-time link. Opening it creates an account already tied to that team; they only
+choose a username and password, and the link then stops working. The link is never shown in the
+app, so the only way to get one is to be the person it was sent to.
+
+Sending goes through [Resend](https://resend.com) (free at this volume), and `APP_URL` makes the
+links point at the right host:
+
+```
+APP_URL=https://ff-draft-web.onrender.com
+RESEND_API_KEY=re_...
+MAIL_FROM=Fantasy Football <invites@yourdomain.com>
+MAIL_REPLY_TO=                         # optional; leave blank and the email asks people not to reply
+```
+
+Resend only delivers from a domain you have verified with it (three DNS records; a few minutes).
+Until then `MAIL_FROM=Fantasy Football <onboarding@resend.dev>` works, but only to the address your
+Resend account is registered under — enough to test, not enough to invite anyone. Plain SMTP is
+still supported as a fallback (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`) when there is
+no Resend key.
+
+If an invite goes to the wrong address, cancel it and send a new one; if the wrong person already
+signed up, **Account → League members** lets an admin move the team to the right account.
+
+Optional `.env` settings: `ALLOW_REGISTRATION=true` lets anyone sign themselves up without a code,
+`SESSION_DAYS` (default 30) sets how long a login lasts, and `COOKIE_SECURE=true` is required if you
+ever serve this over HTTPS.
 
 ## Keeper rules as encoded (verified against the 2019–2026 draft history)
 
@@ -73,6 +101,8 @@ Environment variables to set in the dashboard; the rest come from `render.yaml`:
 | Variable | Why |
 |---|---|
 | `BOOTSTRAP_USERNAME` / `BOOTSTRAP_PASSWORD` | Creates the admin on first boot, so no stranger can claim it. Clear both once you have signed in. |
+| `APP_URL` | What invite links start with; the static site's URL. |
+| `RESEND_API_KEY`, `MAIL_FROM`, `MAIL_REPLY_TO` | Required to invite league-mates; invites go out by email only. |
 | `LEAGUE_ID`, `ESPN_S2`, `SWID` | ESPN league access, same values as your local `.env` |
 | `GOOGLE_SHEET_ID`, `GOOGLE_SHEET_TAB` | Draft board sync; the sheet must be link-viewable |
 

@@ -3,11 +3,13 @@ from __future__ import annotations
 
 from typing import Any, Callable, Literal
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from . import keeper as keeper_engine
 from . import recommend as rec_engine
+from .auth import User
+from .auth_api import current_user
 from .context import AppContext
 from .draft import ConflictError, DraftBoard, open_slots
 from .board import board_view, set_cell
@@ -15,7 +17,7 @@ from .grade import grade_board
 from . import injury as injury_engine
 from .detail import build_detail
 from .strategy import build_guide
-from .models import BoardGrades, BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekView
+from .models import BoardGrades, BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekRecap, WeekView
 
 router = APIRouter(prefix="/api")
 
@@ -24,11 +26,11 @@ def ctx(request: Request) -> AppContext:
     return request.app.state.ctx
 
 
-def _view(c: AppContext) -> DraftView:
+def _view(c: AppContext, team: int) -> DraftView:
     s = c.require_ready()
     assert c.rankings is not None and c.board is not None
     b: DraftBoard = c.board
-    my = [c.rankings.by_id[i] for i in b.my_roster_ids() if i in c.rankings.by_id]
+    my = [c.rankings.by_id[i] for i in b.my_roster_ids(team) if i in c.rankings.by_id]
     names = {p.player_id: p.name for p in c.players}
     last = b.state.history[-1] if b.state.history else None
     undo_label = None
@@ -39,8 +41,8 @@ def _view(c: AppContext) -> DraftView:
     return DraftView(
         state=b.state,
         on_the_clock=b.next_open(),
-        my_next_pick=b.my_next_pick(),
-        picks_until_my_turn=b.picks_until_my_turn(),
+        my_next_pick=b.my_next_pick(team),
+        picks_until_my_turn=b.picks_until_my_turn(team),
         my_roster=my,
         open_slots=open_slots([p.position for p in my], s.roster_slots),
         taken_ids=sorted(b.taken_ids()),
@@ -101,11 +103,16 @@ def get_players(request: Request, pos: str | None = None, q: str | None = None, 
 
 
 @router.get("/keeper-options")
-def get_keeper_options(request: Request) -> Any:
+def get_keeper_options(request: Request, user: User = Depends(current_user)) -> Any:
     c = ctx(request)
     s = c.require_ready()
     assert c.rankings is not None
-    opts = keeper_engine.keeper_options(c.roster_prev, c.rankings, c.drafts, s, c.setup, c.curve())
+    team = c.team_for(user)
+    try:
+        roster = c.roster_prev_for(team)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"Could not load last season's roster for your team: {exc}") from exc
+    opts = keeper_engine.keeper_options(roster, c.rankings, c.drafts, s, c.setup, c.curve(), team_id=team)
     for o in opts:
         o.history_points = c.points_history.get(o.roster_entry.player_id, [])
     return opts
@@ -129,10 +136,12 @@ def get_cheatsheet(request: Request) -> dict[str, Any]:
 
 
 @router.get("/setup")
-def get_setup(request: Request) -> dict[str, Any]:
+def get_setup(request: Request, user: User = Depends(current_user)) -> dict[str, Any]:
     c = ctx(request)
     s = c.require_ready()
     from .draft import resolve_slot_order
+
+    team = c.team_for(user)
 
     order, provisional = resolve_slot_order(s, c.setup)
     espn_order = bool(s.draft_order) and sorted(s.draft_order or []) == sorted(t.team_id for t in s.teams)
@@ -142,7 +151,9 @@ def get_setup(request: Request) -> dict[str, Any]:
         # was refused, and the card needs to see that to offer a way to apply it.
         "board_slot_order": list(c.board.state.slot_order) if c.board else None,
         "warnings": c.setup_warnings + (c.board.state.warnings if c.board else []),
-        "teams": s.teams, "my_team_id": s.my_team_id,
+        "teams": s.teams, "my_team_id": team, "owner_team_id": s.my_team_id,
+        # The signed-in user's keeper, wherever setup stores it.
+        "my_keeper": c.keeper_for(team),
     }
 
 
@@ -152,24 +163,26 @@ class KeepersBody(BaseModel):
 
 
 @router.post("/setup/keepers")
-def post_keepers(request: Request, body: KeepersBody, force: bool = False) -> Any:
+def post_keepers(request: Request, body: KeepersBody, force: bool = False, user: User = Depends(current_user)) -> Any:
     c = ctx(request)
     c.require_ready()
+    team = c.team_for(user)
 
     def apply() -> None:
-        c.setup.other_keepers = [c.resolve_keeper(k) for k in body.other_keepers]
-        c.setup.my_keeper = c.resolve_keeper(body.my_keeper) if body.my_keeper else None
+        others = [c.resolve_keeper(k) for k in body.other_keepers]
+        mine = c.resolve_keeper(body.my_keeper) if body.my_keeper else None
+        c.set_keeper_for(team, mine, others)
 
     _apply_setup(c, apply, force)
-    return get_setup(request)
+    return get_setup(request, user)
 
 
 @router.post("/setup/pick-trades")
-def post_pick_trades(request: Request, trades: list[PickTrade] = Body(...), force: bool = False) -> Any:
+def post_pick_trades(request: Request, trades: list[PickTrade] = Body(...), force: bool = False, user: User = Depends(current_user)) -> Any:
     c = ctx(request)
     c.require_ready()
     _apply_setup(c, lambda: setattr(c.setup, "pick_trades", [c.resolve_trade(t) for t in trades]), force)
-    return get_setup(request)
+    return get_setup(request, user)
 
 
 class SlotBody(BaseModel):
@@ -179,7 +192,7 @@ class SlotBody(BaseModel):
 
 
 @router.post("/setup/slot")
-def post_slot(request: Request, body: SlotBody, force: bool = False) -> Any:
+def post_slot(request: Request, body: SlotBody, force: bool = False, user: User = Depends(current_user)) -> Any:
     """force=true rebuilds the board even when picks are recorded, discarding them."""
     c = ctx(request)
     c.require_ready()
@@ -191,7 +204,7 @@ def post_slot(request: Request, body: SlotBody, force: bool = False) -> Any:
             c.setup.order_confirmed = body.order_confirmed
 
     _apply_setup(c, apply, force)
-    return get_setup(request)
+    return get_setup(request, user)
 
 
 class OverrideBody(BaseModel):
@@ -200,7 +213,7 @@ class OverrideBody(BaseModel):
 
 
 @router.post("/setup/keeper-cost-override")
-def post_override(request: Request, body: OverrideBody) -> Any:
+def post_override(request: Request, body: OverrideBody, user: User = Depends(current_user)) -> Any:
     c = ctx(request)
     c.require_ready()
     if body.cost_round is None:
@@ -208,7 +221,7 @@ def post_override(request: Request, body: OverrideBody) -> Any:
     else:
         c.setup.keeper_cost_overrides[body.player_id] = body.cost_round
     c.save_setup()
-    return get_keeper_options(request)
+    return get_keeper_options(request, user)
 
 
 def _apply_setup(c: AppContext, mutate: "Callable[[], None]", force: bool = False) -> None:
@@ -229,8 +242,9 @@ def _apply_setup(c: AppContext, mutate: "Callable[[], None]", force: bool = Fals
 
 
 @router.get("/draft/state", response_model=DraftView)
-def get_draft_state(request: Request) -> DraftView:
-    return _view(ctx(request))
+def get_draft_state(request: Request, user: User = Depends(current_user)) -> DraftView:
+    c = ctx(request)
+    return _view(c, c.team_for(user))
 
 
 class StateAction(BaseModel):
@@ -238,14 +252,14 @@ class StateAction(BaseModel):
 
 
 @router.post("/draft/state", response_model=DraftView)
-def post_draft_state(request: Request, body: StateAction) -> DraftView:
+def post_draft_state(request: Request, body: StateAction, user: User = Depends(current_user)) -> DraftView:
     c = ctx(request)
     c.require_ready()
     if body.action == "reset":
         c.rebuild_board(force=True)
     else:
         raise HTTPException(status_code=400, detail="Unknown action")
-    return _view(c)
+    return _view(c, c.team_for(user))
 
 
 class PickBody(BaseModel):
@@ -255,17 +269,18 @@ class PickBody(BaseModel):
 
 
 @router.post("/draft/pick", response_model=DraftView)
-def post_pick(request: Request, body: PickBody) -> DraftView:
+def post_pick(request: Request, body: PickBody, user: User = Depends(current_user)) -> DraftView:
     c = ctx(request)
     c.require_ready()
     assert c.board is not None and c.rankings is not None
+    team = c.team_for(user)
     if body.player_id not in c.rankings.by_id:
         raise HTTPException(status_code=404, detail="Unknown player id")
     try:
-        c.board.record_pick(body.player_id, mine=body.mine, force=body.force)
+        c.board.record_pick(body.player_id, mine=body.mine, force=body.force, team_id=team)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _view(c)
+    return _view(c, team)
 
 
 class AssignBody(BaseModel):
@@ -274,7 +289,7 @@ class AssignBody(BaseModel):
 
 
 @router.post("/draft/assign", response_model=DraftView)
-def post_assign(request: Request, body: AssignBody) -> DraftView:
+def post_assign(request: Request, body: AssignBody, user: User = Depends(current_user)) -> DraftView:
     """Draft a player into any pick, or clear it. Order-independent, so falling behind is recoverable."""
     c = ctx(request)
     c.require_ready()
@@ -285,11 +300,11 @@ def post_assign(request: Request, body: AssignBody) -> DraftView:
         c.board.assign(body.overall, body.player_id)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _view(c)
+    return _view(c, c.team_for(user))
 
 
 @router.post("/draft/skip", response_model=DraftView)
-def post_skip(request: Request) -> DraftView:
+def post_skip(request: Request, user: User = Depends(current_user)) -> DraftView:
     c = ctx(request)
     c.require_ready()
     assert c.board is not None
@@ -297,29 +312,30 @@ def post_skip(request: Request) -> DraftView:
         c.board.skip_pick()
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return _view(c)
+    return _view(c, c.team_for(user))
 
 
 @router.post("/draft/undo", response_model=DraftView)
-def post_undo(request: Request) -> DraftView:
+def post_undo(request: Request, user: User = Depends(current_user)) -> DraftView:
     c = ctx(request)
     c.require_ready()
     assert c.board is not None
     c.board.undo()
-    return _view(c)
+    return _view(c, c.team_for(user))
 
 
 @router.get("/draft/recommendations")
-def get_recommendations(request: Request) -> dict[str, Any]:
+def get_recommendations(request: Request, user: User = Depends(current_user)) -> dict[str, Any]:
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None and c.rankings is not None
-    recs = rec_engine.recommend(c.board, c.rankings, s)
+    team = c.team_for(user)
+    recs = rec_engine.recommend(c.board, c.rankings, s, team_id=team)
     by_pos: dict[str, Recommendation] = rec_engine.best_by_position(recs)
     return {
         "top": rec_engine.top(recs),
         "by_position": by_pos,
-        **rec_engine.roster_needs(c.board, c.rankings, s),
+        **rec_engine.roster_needs(c.board, c.rankings, s, team_id=team),
     }
 
 
@@ -327,11 +343,11 @@ def get_recommendations(request: Request) -> dict[str, Any]:
 
 
 @router.get("/board", response_model=BoardView)
-def get_board(request: Request) -> BoardView:
+def get_board(request: Request, user: User = Depends(current_user)) -> BoardView:
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None
-    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending, team_id=c.team_for(user))
 
 
 class CellBody(BaseModel):
@@ -343,7 +359,7 @@ class CellBody(BaseModel):
 
 
 @router.post("/board/cell", response_model=BoardView)
-def post_cell(request: Request, body: CellBody) -> BoardView:
+def post_cell(request: Request, body: CellBody, user: User = Depends(current_user)) -> BoardView:
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None
@@ -352,16 +368,16 @@ def post_cell(request: Request, body: CellBody) -> BoardView:
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     c.save_setup()
-    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending, team_id=c.team_for(user))
 
 
 @router.get("/board/grades", response_model=BoardGrades)
-def get_board_grades(request: Request) -> BoardGrades:
+def get_board_grades(request: Request, user: User = Depends(current_user)) -> BoardGrades:
     """Score every team's draft 0-100 against what their pick slots were worth."""
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None and c.rankings is not None
-    return grade_board(c.board, s, c.setup, c.rankings)
+    return grade_board(c.board, s, c.setup, c.rankings, team_id=c.team_for(user))
 
 
 @router.get("/sheet/status", response_model=SheetStatus)
@@ -392,7 +408,7 @@ class ConflictResolveBody(BaseModel):
 
 
 @router.post("/sheet/conflicts/resolve", response_model=BoardView)
-def post_resolve_conflict(request: Request, body: ConflictResolveBody) -> BoardView:
+def post_resolve_conflict(request: Request, body: ConflictResolveBody, user: User = Depends(current_user)) -> BoardView:
     c = ctx(request)
     s = c.require_ready()
     assert c.board is not None
@@ -400,7 +416,7 @@ def post_resolve_conflict(request: Request, body: ConflictResolveBody) -> BoardV
         c.resolve_sheet_conflict(body.key, body.choice)
     except ConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending)
+    return board_view(c.board, s, c.setup, c.players_by_id, c.sheet_conflicts.pending, team_id=c.team_for(user))
 
 
 class SheetColumnsBody(BaseModel):
@@ -427,10 +443,22 @@ def post_external_refresh(request: Request) -> Any:
 
 
 @router.get("/week", response_model=WeekView)
-def get_week(request: Request, week: int | None = None, refresh: bool = False) -> WeekView:
+def get_week(request: Request, week: int | None = None, refresh: bool = False, user: User = Depends(current_user)) -> WeekView:
     c = ctx(request)
     try:
-        return c.week_view(week=week, refresh=refresh)
+        return c.week_view(week=week, refresh=refresh, team_id=c.team_for(user))
+    except LookupError:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/recap", response_model=WeekRecap)
+def get_recap(request: Request, week: int | None = None, refresh: bool = False, user: User = Depends(current_user)) -> WeekRecap:
+    """Last finished week: result, why, and what to carry into the next one."""
+    c = ctx(request)
+    try:
+        return c.week_recap(week=week, refresh=refresh, team_id=c.team_for(user))
     except LookupError:
         raise
     except RuntimeError as exc:

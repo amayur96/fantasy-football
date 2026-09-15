@@ -88,7 +88,7 @@ def fetch_espn_week(cfg: Settings, my_team_id: int, week: int | None = None, sea
 
 def load_or_fetch_espn_week(cfg: Settings, my_team_id: int, week: int | None, refresh: bool) -> dict[str, Any]:
     key = week or "current"
-    path = cfg.data_path / f"week_{cfg.season}_{key}.json"
+    path = cfg.data_path / f"week_{cfg.season}_t{my_team_id}_{key}.json"
     cached = read_json(path)
     if cached and not refresh:
         fetched = datetime.fromisoformat(cached["fetched_at"])
@@ -210,3 +210,74 @@ def apply_bc_tiers(players: list[WeekPlayer], bc: dict[Position, list[tuple[str,
                 wp = next((p for p in by_pos.get(pos, []) if hit and p.player_id == hit.player_id), None)
             if wp is not None and wp.bc_tier is None:
                 wp.bc_tier = tier
+
+
+# ---- finished matchups (box scores) ----------------------------------------------------
+
+BOX_TTL = timedelta(minutes=30)
+
+
+def _box_player(p: Any, week: int) -> dict[str, Any] | None:
+    pos = p.position if p.position in POSITION_BY_ID.values() else None
+    if pos is None:
+        return None
+    inj = getattr(p, "injuryStatus", None)
+    inj = inj.upper() if isinstance(inj, str) and inj.upper() not in ("", "ACTIVE", "NORMAL") else None
+    hist = []
+    for wk, st in sorted((k, v) for k, v in (p.stats or {}).items() if isinstance(k, int) and 0 < k <= week):
+        if st.get("breakdown"):
+            hist.append((wk, float(st.get("points") or 0), float(st.get("projected_points") or 0)))
+    return {
+        "player_id": int(p.playerId), "name": p.name, "position": pos, "pro_team": p.proTeam or "", "slot": p.slot_position or "BE",
+        "points": float(p.points or 0), "projected": float(p.projected_points or 0),
+        "opponent": None if p.pro_opponent in (None, "None") else p.pro_opponent, "opp_rank_vs_pos": int(p.pro_pos_rank) or None,
+        "on_bye": bool(p.on_bye_week), "injury_status": inj, "game_played": bool(p.on_bye_week) or int(p.game_played) >= 100, "history": hist,
+    }
+
+
+def fetch_box_score(cfg: Settings, my_team_id: int, week: int, season: int | None = None) -> dict[str, Any]:
+    """My matchup for one week: both lineups with actual and projected points, scores, and my record after it."""
+    from espn_api.football import League
+
+    year = season or cfg.season
+    league = League(league_id=cfg.league_id, year=year, espn_s2=cfg.espn_s2, swid=cfg.swid)
+    current = int(league.current_week or 0)
+    box = next((b for b in league.box_scores(week) if my_team_id in (getattr(b.home_team, "team_id", None), getattr(b.away_team, "team_id", None))), None)
+    if box is None:
+        raise LookupError(f"No matchup for week {week}")
+    home = getattr(box.home_team, "team_id", None) == my_team_id
+    me, opp = (box.home_team, box.away_team) if home else (box.away_team, box.home_team)
+    mine, theirs = (box.home_lineup, box.away_lineup) if home else (box.away_lineup, box.home_lineup)
+    my_score, opp_score = (box.home_score, box.away_score) if home else (box.away_score, box.home_score)
+    my_proj, opp_proj = (box.home_projected, box.away_projected) if home else (box.away_projected, box.home_projected)
+    outcomes = list(getattr(me, "outcomes", []) or [])[:week]
+    record = f"{outcomes.count('W')}-{outcomes.count('L')}" + (f"-{outcomes.count('T')}" if "T" in outcomes else "")
+    my_lineup = [x for x in (_box_player(p, week) for p in mine) if x]
+    opp_lineup = [x for x in (_box_player(p, week) for p in theirs) if x]
+    starters = [p for p in my_lineup + opp_lineup if p["slot"] not in ("BE", "IR")]
+    complete = week < current or (bool(starters) and all(p["game_played"] for p in starters))
+    return {
+        "season": year, "week": week, "current_week": current, "complete": complete,
+        "my_team": getattr(me, "team_name", "") or "", "opponent": getattr(opp, "team_name", "") or "", "record": record,
+        "my_score": float(my_score), "opp_score": float(opp_score), "my_projected": float(my_proj), "opp_projected": float(opp_proj),
+        "my_lineup": my_lineup, "opp_lineup": opp_lineup, "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def load_or_fetch_box_score(cfg: Settings, my_team_id: int, week: int, refresh: bool) -> dict[str, Any]:
+    """A finished week never changes, so it is cached for good; an in-progress one for half an hour."""
+    path = cfg.data_path / f"box_{cfg.season}_t{my_team_id}_{week}.json"
+    cached = read_json(path)
+    if cached and not refresh:
+        if cached.get("complete"):
+            return cached
+        if datetime.now(timezone.utc) - datetime.fromisoformat(cached["fetched_at"]) < BOX_TTL:
+            return cached
+    try:
+        data = fetch_box_score(cfg, my_team_id, week)
+    except Exception:
+        if cached:
+            return cached
+        raise
+    write_json(path, data)
+    return data

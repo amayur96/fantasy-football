@@ -1,14 +1,16 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Route, Routes } from "react-router";
+import { BrowserRouter, Navigate, Route, Routes } from "react-router";
 import { AppShell } from "@/components/AppShell";
 import { AuthProvider } from "@/components/AuthProvider";
 import { RequireAuth } from "@/components/RequireAuth";
+import { RequireTeam } from "@/components/RequireTeam";
 import { Account } from "@/pages/Account";
 import { Board } from "@/pages/Board";
 import { LiveDraft } from "@/pages/LiveDraft";
 import { Dashboard } from "@/pages/Dashboard";
 import { Keeper } from "@/pages/Keeper";
 import { Login } from "@/pages/Login";
+import { Join } from "@/pages/Join";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -23,13 +25,19 @@ export default function App() {
         <AuthProvider>
           <Routes>
             <Route path="login" element={<Login />} />
+            <Route path="join" element={<Join />} />
             <Route element={<RequireAuth />}>
-              <Route element={<AppShell />}>
+              <Route element={<RequireTeam />}>
+                <Route element={<AppShell />}>
                 <Route index element={<Dashboard />} />
-                <Route path="keeper" element={<Keeper />} />
-                <Route path="board" element={<Board />} />
                 <Route path="draft" element={<LiveDraft />} />
+                <Route path="draft/board" element={<Board />} />
+                <Route path="draft/keepers" element={<Keeper />} />
                 <Route path="account" element={<Account />} />
+                {/* Bookmarks and printed cheat sheets from before the draft tools moved. */}
+                <Route path="board" element={<Navigate to="/draft/board" replace />} />
+                <Route path="keeper" element={<Navigate to="/draft/keepers" replace />} />
+                </Route>
               </Route>
             </Route>
           </Routes>

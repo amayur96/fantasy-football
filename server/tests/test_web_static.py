@@ -31,7 +31,7 @@ def test_serves_real_files(web_client):
 
 
 def test_client_routes_fall_back_to_the_shell(web_client):
-    for path in ("/", "/board", "/login", "/account", "/draft"):
+    for path in ("/", "/login", "/account", "/draft", "/draft/board", "/draft/keepers", "/board"):
         r = web_client.get(path)
         assert r.status_code == 200 and "shell" in r.text, path
 

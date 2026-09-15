@@ -42,6 +42,23 @@ services:
         sync: false
       - key: BOOTSTRAP_PASSWORD
         sync: false
+      # Team invite links start with this; set it to the static site's URL.
+      - key: APP_URL
+        sync: false
+      # Invites are emailed, so these are needed to let league-mates in. Either a Resend key
+      # (with a verified domain in MAIL_FROM) or a Gmail account over SMTP with an App Password.
+      - key: MAIL_FROM
+        sync: false
+      - key: RESEND_API_KEY
+        sync: false
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
       - key: SEASON
         value: "2026"
       # League secrets: set these in the Render dashboard, not in the repo.

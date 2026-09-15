@@ -336,13 +336,16 @@ export function LineupCard({ view, onWeekChange, onRefresh, refreshing }: Lineup
         </div>
         {!view.roster_empty && (
           <p className="text-xs text-muted-foreground">
-            Current lineup projects <span className="num font-medium text-foreground">{fmt(view.current_total)}</span> · optimal{" "}
-            <span className="num font-medium text-foreground">{fmt(view.optimal_total)}</span>
-            {view.optimal_total - view.current_total > 0.05 && (
+            Current lineup projects <span className="num font-medium text-foreground">{fmt(view.current_total)}</span>
+            {view.optimal_total - view.current_total > 0.05 ? (
               <>
                 {" "}
-                (<span className="num text-emerald-700 dark:text-emerald-300">{fmtSigned(view.optimal_total - view.current_total)}</span> available)
+                · <span className="num font-medium text-foreground">{fmt(view.optimal_total)}</span> with the{" "}
+                {view.moves.length} recommended move{view.moves.length === 1 ? "" : "s"} below (
+                <span className="num text-emerald-700 dark:text-emerald-300">{fmtSigned(view.optimal_total - view.current_total)}</span>)
               </>
+            ) : (
+              " — already the best lineup available from this roster."
             )}
           </p>
         )}

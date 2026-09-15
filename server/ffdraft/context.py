@@ -313,8 +313,93 @@ class AppContext:
         self.setup.sheet_columns = {h: int(t) for h, t in columns.items()}
         self.save_setup()
 
+    # ---- whose team -------------------------------------------------------
+    def team_for(self, user: object) -> int:
+        """The team the signed-in user manages; the cookie owner's team until they pick one."""
+        s = self.require_ready()
+        tid = getattr(user, "team_id", None)
+        return tid if tid is not None and any(t.team_id == tid for t in s.teams) else s.my_team_id
+
+    def roster_prev_for(self, team_id: int) -> list[RosterEntry]:
+        """Last season's roster for keeper decisions. The owner's comes from the sheet when available;
+        anyone else's is read from ESPN (one cookie sees every team) and cached per team."""
+        s = self.require_ready()
+        if team_id == s.my_team_id:
+            return self.roster_prev
+        return self.client.fetch_team_roster(self.cfg.season - 1, team_id)
+
+    def keeper_for(self, team_id: int) -> KeeperEntry | None:
+        s = self.require_ready()
+        if team_id == s.my_team_id:
+            return self.setup.my_keeper
+        return next((k for k in self.setup.other_keepers if k.team_id == team_id), None)
+
+    def set_keeper_for(self, team_id: int, keeper: KeeperEntry | None, others: list[KeeperEntry]) -> None:
+        """Store a team's keeper choice: the owner's in my_keeper, everyone else's in other_keepers."""
+        s = self.require_ready()
+        if team_id == s.my_team_id:
+            self.setup.other_keepers = others
+            self.setup.my_keeper = keeper
+            return
+        rest = [k for k in others if k.team_id != team_id]
+        if keeper is not None:
+            keeper.team_id = team_id
+            rest.append(keeper)
+        self.setup.other_keepers = rest
+
+    # ---- week recap -------------------------------------------------------
+    def week_recap(self, week: int | None = None, refresh: bool = False, team_id: int | None = None) -> "WeekRecap":
+        """Recap of exactly `week` (the current one when None). A week that is still being played gets
+        an 'unavailable' recap rather than the previous week's, so the recap always sits with its week."""
+        from . import recap, sleeper, weekly
+        from .models import WeekRecap
+
+        s = self.require_ready()
+        me = team_id if team_id is not None else s.my_team_id
+        errors: list[str] = []
+        sources: dict[str, str] = {}
+        try:
+            cur = weekly.load_or_fetch_espn_week(self.cfg, me, None, refresh)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"ESPN weekly data: {exc}") from exc
+        current_week = int(cur.get("current_week") or 0)
+        target = week or current_week
+        if current_week <= 0 or target <= 0:
+            return recap.unavailable(self.cfg.season, max(target, 1), "The season has not started yet — the first recap arrives after Week 1.")
+        if target > current_week:
+            return recap.unavailable(self.cfg.season, target, f"NFL Week {target} has not been played yet.")
+        try:
+            box = weekly.load_or_fetch_box_score(self.cfg, me, target, refresh)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"ESPN box score: {exc}") from exc
+        if not box.get("complete"):
+            return recap.unavailable(self.cfg.season, target, f"NFL Week {target} is still in progress — the recap arrives once the last game is final.")
+        sources["espn"] = box["fetched_at"]
+        # This week's view, so lessons can say whether the projections already agree with hindsight.
+        current: WeekView | None = None
+        try:
+            current = self.week_view(refresh=False, team_id=me)
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"this week's lineup: {exc}")
+        fa_ids = {int(f["player_id"]) for f in cur.get("free_agents", [])}
+        sl_by_espn: dict[int, dict] = {}
+        adds: list[tuple[dict, int]] = []
+        drops: list[tuple[dict, int]] = []
+        try:
+            sl = sleeper.load_or_fetch_players(self.cfg, refresh)
+            sl_by_espn = sleeper.by_espn_id(sl)
+            adds = [(sl[str(r["player_id"])], int(r["count"])) for r in sleeper.load_or_fetch_trending(self.cfg, "add", refresh) if str(r["player_id"]) in sl]
+            drops = [(sl[str(r["player_id"])], int(r["count"])) for r in sleeper.load_or_fetch_trending(self.cfg, "drop", refresh) if str(r["player_id"]) in sl]
+            sources["sleeper"] = f"{len(adds)} trending adds, {len(drops)} drops, injury notes for {len(sl_by_espn)} players"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Sleeper: {exc}")
+        return recap.build_recap(
+            box, s, current=current, players_by_id=self.players_by_id, sleeper=sl_by_espn, trending_add=adds, trending_drop=drops,
+            league_fa_ids=fa_ids, sources=sources, errors=errors,
+        )
+
     # ---- weekly lineup ----------------------------------------------------
-    def week_view(self, week: int | None = None, refresh: bool = False) -> "WeekView":
+    def week_view(self, week: int | None = None, refresh: bool = False, team_id: int | None = None) -> "WeekView":
         from datetime import datetime, timezone
 
         from . import weekly
@@ -323,9 +408,10 @@ class AppContext:
         from .models import WeekPlayer, WeekView
 
         s = self.require_ready()
+        me = team_id if team_id is not None else s.my_team_id
         errors: list[str] = []
         try:
-            data = weekly.load_or_fetch_espn_week(self.cfg, s.my_team_id, week, refresh)
+            data = weekly.load_or_fetch_espn_week(self.cfg, me, week, refresh)
         except Exception as exc:  # noqa: BLE001
             raise RuntimeError(f"ESPN weekly data: {exc}") from exc
         roster = [WeekPlayer(**r) for r in data["roster"]]
@@ -350,12 +436,14 @@ class AppContext:
         w = LineupWeights()
         for p in roster + fas:
             p.score = weekly_score(p, w)
-        moves, optimal, cur_total, opt_total = start_sit_moves(roster, s, w) if roster else ([], {}, 0.0, 0.0)
+        # `recommended` is the current lineup with the suggested moves applied, so the rows the
+        # dashboard highlights and the moves it lists always describe the same changes.
+        moves, recommended, cur_total, rec_total = start_sit_moves(roster, s, w) if roster else ([], {}, 0.0, 0.0)
         waivers = waiver_moves(roster, fas, s, w) if roster else []
-        rows = slot_rows(roster, s, optimal)
+        rows = slot_rows(roster, s, recommended)
         return WeekView(
             season=int(data["season"]), week=wk, week_label=label, fetched_at=datetime.fromisoformat(data["fetched_at"]) if isinstance(data["fetched_at"], str) else datetime.now(timezone.utc),
             roster_empty=not roster, opponent_name=data.get("opponent_name"), rows=rows,
             starters=[r.player for r in rows if r.player and r.slot not in ("BE", "IR")], bench=[r.player for r in rows if r.player and r.slot in ("BE", "IR")],
-            optimal_slots=optimal, current_total=cur_total, optimal_total=opt_total, moves=moves, waivers=waivers, sources=sources, errors=errors,
+            optimal_slots=recommended, current_total=cur_total, optimal_total=rec_total, moves=moves, waivers=waivers, sources=sources, errors=errors,
         )

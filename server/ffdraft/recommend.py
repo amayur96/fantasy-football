@@ -64,8 +64,8 @@ class MarketContext:
     total_rivals: int = 0
 
 
-def market_context(board: DraftBoard, rankings: Rankings, settings: LeagueSettings) -> MarketContext:
-    me = settings.my_team_id
+def market_context(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, team_id: int | None = None) -> MarketContext:
+    me = team_id if team_id is not None else settings.my_team_id
     slots_by_team = team_open_slots(board, rankings, settings)
     filled = [p for p in board.picks if p.player_id is not None and not p.is_keeper]
     filled.sort(key=lambda p: p.overall)
@@ -75,7 +75,7 @@ def market_context(board: DraftBoard, rankings: Rankings, settings: LeagueSettin
         pos = rankings.by_id[pick.player_id].position if pick.player_id in rankings.by_id else None
         if pos:
             run[pos] = run.get(pos, 0) + 1
-    nxt = board.my_next_pick()
+    nxt = board.my_next_pick(me)
     upcoming = [p for p in board.picks if p.player_id is None and not p.unknown and (nxt is None or p.overall < nxt.overall)]
     rivals_needing: dict[str, int] = {}
     before_needing: dict[str, int] = {}
@@ -124,10 +124,10 @@ def _need(p: RankedPlayer, slots: dict[str, int], counts: dict[str, int], rounds
     return w.need_saturated, f"You're set at {pos}; this is value-only"
 
 
-def recommend(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w: RecommendWeights | None = None) -> list[Recommendation]:
+def recommend(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w: RecommendWeights | None = None, team_id: int | None = None) -> list[Recommendation]:
     w = w or RecommendWeights()
     taken = board.taken_ids()
-    my_ids = board.my_roster_ids()
+    my_ids = board.my_roster_ids(team_id)
     my_players = [rankings.by_id[i] for i in my_ids if i in rankings.by_id]
     slots = open_slots([p.position for p in my_players], settings.roster_slots)
     counts: dict[str, int] = {pos: 0 for pos in POSITIONS}
@@ -136,7 +136,7 @@ def recommend(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w
     clock = board.next_open()
     current_round = clock.round if clock else settings.rounds
     rounds_left = settings.rounds - current_round + 1
-    nxt = board.my_next_pick()
+    nxt = board.my_next_pick(team_id)
     n_until = board.picks_until_my_turn() or 0
     available = [p for p in rankings.overall if p.player_id not in taken]
     # positional share of the next 2n picks by ADP
@@ -149,7 +149,7 @@ def recommend(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w
         avail_by_pos[p.position].append(p)
 
     targets = bench_targets(settings, w)
-    market = market_context(board, rankings, settings)
+    market = market_context(board, rankings, settings, team_id)
     have_summary = ", ".join(f"{n} {pos}" for pos, n in counts.items() if n) or "nothing yet"
     out: list[Recommendation] = []
     for p in available[:120]:
@@ -261,10 +261,10 @@ def best_by_position(recs: list[Recommendation]) -> dict[str, Recommendation]:
     return out
 
 
-def roster_needs(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w: RecommendWeights | None = None) -> dict[str, object]:
+def roster_needs(board: DraftBoard, rankings: Rankings, settings: LeagueSettings, w: RecommendWeights | None = None, team_id: int | None = None) -> dict[str, object]:
     """What the roster is still missing, in the same terms the recommendations use."""
     w = w or RecommendWeights()
-    my = [rankings.by_id[i] for i in board.my_roster_ids() if i in rankings.by_id]
+    my = [rankings.by_id[i] for i in board.my_roster_ids(team_id) if i in rankings.by_id]
     slots = open_slots([p.position for p in my], settings.roster_slots)
     counts: dict[str, int] = {pos: 0 for pos in POSITIONS}
     for p in my:
@@ -272,7 +272,7 @@ def roster_needs(board: DraftBoard, rankings: Rankings, settings: LeagueSettings
     unfilled = [slot for slot, n in slots.items() if n > 0 and slot not in ("BE", "IR") for _ in range(n)]
     targets = bench_targets(settings, w)
     thin = [pos for pos, target in targets.items() if target and counts.get(pos, 0) < target and pos not in ("K", "D/ST")]
-    m = market_context(board, rankings, settings)
+    m = market_context(board, rankings, settings, team_id)
     return {
         "market": {
             "run": m.run, "run_window": m.run_window, "rivals_needing": m.rivals_needing,
