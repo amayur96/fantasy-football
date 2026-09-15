@@ -3,15 +3,18 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LineupCard } from "@/components/dashboard/LineupCard";
 import { MovesCard } from "@/components/dashboard/MovesCard";
+import { RecapCard } from "@/components/dashboard/RecapCard";
 import { NotReady } from "@/components/NotReady";
 import { errorMessage, isNotSynced } from "@/lib/api";
-import { useRefreshWeek, useWeek } from "@/lib/queries";
+import { useRecap, useRefreshWeek, useWeek } from "@/lib/queries";
 
 export function Dashboard() {
   // undefined = whatever ESPN says is the current week; a number once the user pages around.
   const [week, setWeek] = useState<number | undefined>(undefined);
   const wk = useWeek(week);
   const refresh = useRefreshWeek(week);
+  // Follows the same week selector: paging back to Week 1 shows the Week 1 recap.
+  const recap = useRecap(week);
 
   return (
     <div className="space-y-5">
@@ -33,6 +36,7 @@ export function Dashboard() {
         <>
           <LineupCard view={wk.data} onWeekChange={setWeek} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending} />
           <MovesCard view={wk.data} />
+          <RecapCard recap={recap.data} isLoading={recap.isLoading} error={recap.error} />
         </>
       )}
     </div>

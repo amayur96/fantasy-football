@@ -121,7 +121,7 @@ def test_league_routes_require_sign_in(client):
 
 
 def test_status_and_first_registration(client):
-    assert client.get("/api/auth/status").json() == {"users_exist": False, "allow_registration": False}
+    assert client.get("/api/auth/status").json() == {"users_exist": False, "allow_registration": False, "mail_configured": False}
     r = client.post("/api/auth/register", json={"username": "Arjun", "password": PW})
     assert r.status_code == 200
     body = r.json()
@@ -133,7 +133,7 @@ def test_status_and_first_registration(client):
 def test_second_registration_closed_by_default(client):
     client.post("/api/auth/register", json={"username": "arjun", "password": PW})
     r = client.post("/api/auth/register", json={"username": "friend", "password": PW})
-    assert r.status_code == 403 and "admin" in r.json()["detail"]
+    assert r.status_code == 403 and "invite link" in r.json()["detail"]
 
 
 def test_open_registration_when_enabled(tmp_path):
@@ -257,3 +257,211 @@ def test_bootstrap_does_not_touch_existing_accounts(tmp_path):
 
 def test_healthz_needs_no_session(client):
     assert client.get("/healthz").json() == {"ok": True}
+
+
+
+# ---- team invites --------------------------------------------------------
+@pytest.fixture
+def league_client(tmp_path, settings, players):
+    """An app with a synced league (so teams exist), SMTP 'configured', a recorder in place of the
+    mail server, and the commissioner signed in as admin."""
+    from ffdraft.store import write_json
+
+    write_json(tmp_path / "settings.json", settings)
+    write_json(tmp_path / "players_2026.json", players)
+    cfg = Settings(league_id=1, espn_s2="x", swid="{SWID-3}", season=2026, data_dir=tmp_path, app_url="https://ff.example.com", resend_api_key="re_test", mail_from="FF <ff@test.co>")
+    with TestClient(create_app(AppContext(cfg))) as c:
+        c.app.state.outbox = []
+        c.app.state.auth.send_mail = lambda cfg, to, subject, body: c.app.state.outbox.append((to, subject, body))
+        assert c.post("/api/auth/register", json={"username": "commish", "password": PW}).status_code == 200
+        yield c
+
+
+def _fresh(client):
+    """A second, signed-out browser against the same app."""
+    return TestClient(client.app)
+
+
+def _token_from(email_body: str) -> str:
+    import re
+
+    return re.search(r"/join\?token=([A-Za-z0-9_-]+)", email_body).group(1)
+
+
+def test_first_admin_owns_the_cookie_holders_team(league_client):
+    me = league_client.get("/api/auth/me").json()
+    assert me["is_admin"] is True and me["team_id"] == 3  # conftest: SWID-3 owns team 3
+
+
+def test_nobody_can_register_or_pick_a_team_without_an_invite(league_client):
+    other = _fresh(league_client)
+    r = other.post("/api/auth/register", json={"username": "friend", "password": PW})
+    assert r.status_code == 403 and "invite" in r.json()["detail"]
+    assert other.post("/api/auth/team", json={"team_id": 5}).status_code in (401, 404, 405)
+
+
+def test_invite_is_emailed_and_the_link_never_appears_in_the_api(league_client):
+    r = league_client.post("/api/auth/invites", json={"team_id": 5, "email": " Friend@Example.com "})
+    assert r.status_code == 200
+    inv = r.json()
+    assert inv["status"] == "pending" and inv["team_name"] == "Team Owner5" and inv["email"] == "friend@example.com"
+    assert "token" not in inv and "link" not in inv
+    to, subject, body = league_client.app.state.outbox[-1]
+    assert to == "friend@example.com" and subject == "Your Test League fantasy football tool login"
+    assert "Team Owner5" not in subject and "manager of Team Owner5" in body  # team in the body, never the subject
+    assert "https://ff.example.com/join?token=" in body and "expires in 14 days" in body
+    assert body.rstrip().endswith("Please don't reply to this email \u2014 it isn't monitored. Questions go to the tool's admin.")
+    token = _token_from(body)
+    assert token not in str(league_client.get("/api/auth/invites").json())
+
+    friend = _fresh(league_client)
+    info = friend.get(f"/api/auth/invite/{token}").json()
+    assert info == {"valid": True, "reason": "", "team_name": "Team Owner5", "league_name": "Test League", "test": False}
+    r = friend.post("/api/auth/join", json={"token": token, "username": "friend", "password": PW})
+    assert r.status_code == 200 and r.json()["test"] is False
+    made = r.json()["user"]
+    assert made["team_id"] == 5 and made["email"] == "friend@example.com" and made["is_admin"] is False
+    assert friend.get("/api/setup").json()["my_team_id"] == 5
+    assert next(c for c in friend.get("/api/board").json()["columns"] if c["is_me"])["team_id"] == 5
+
+    # the link is spent
+    assert friend.get(f"/api/auth/invite/{token}").json()["valid"] is False
+    assert _fresh(league_client).post("/api/auth/join", json={"token": token, "username": "impostor", "password": PW}).status_code == 403
+    listed = league_client.get("/api/auth/invites").json()
+    assert listed[0]["status"] == "used" and listed[0]["used_by"] == "friend"
+    assert next(t for t in league_client.get("/api/auth/teams").json() if t["team_id"] == 5)["claimed_by"] == "friend"
+
+
+def test_invite_needs_a_real_email_and_a_mail_server(league_client):
+    r = league_client.post("/api/auth/invites", json={"team_id": 5, "email": "not-an-email"})
+    assert r.status_code == 400 and "email address" in r.json()["detail"]
+    assert league_client.post("/api/auth/invites", json={"team_id": 5}).status_code == 422
+    league_client.app.state.auth.cfg.resend_api_key = ""
+    r = league_client.post("/api/auth/invites", json={"team_id": 5, "email": "a@b.co"})
+    assert r.status_code == 400 and "not set up" in r.json()["detail"]
+    assert league_client.get("/api/auth/invites").json() == []  # nothing created when it cannot be sent
+
+
+def test_send_failure_is_reported_and_resend_works(league_client):
+    def boom(cfg, to, subject, body):
+        raise ConnectionError("smtp down")
+
+    league_client.app.state.auth.send_mail = boom
+    r = league_client.post("/api/auth/invites", json={"team_id": 6, "email": "six@example.com"})
+    assert r.status_code == 502 and "smtp down" in r.json()["detail"]
+    inv = league_client.get("/api/auth/invites").json()[0]  # created, so Resend can retry
+    assert inv["status"] == "pending" and inv["sent_at"] is None and "smtp down" in inv["send_error"]
+    league_client.app.state.auth.send_mail = lambda cfg, to, subject, body: (league_client.app.state.outbox.append((to, subject, body)), "msg_123")[1]
+    r = league_client.post(f"/api/auth/invites/{inv['id']}/resend")
+    assert r.status_code == 200 and r.json()["send_error"] == "" and r.json()["sent_at"] and r.json()["message_id"] == "msg_123"
+    assert league_client.app.state.outbox[-1][0] == "six@example.com"
+
+
+def test_invites_are_one_per_team_and_can_be_revoked(league_client):
+    a = league_client.post("/api/auth/invites", json={"team_id": 6, "email": "a@example.com"}).json()
+    b = league_client.post("/api/auth/invites", json={"team_id": 6, "email": "b@example.com"}).json()
+    by_id = {i["id"]: i["status"] for i in league_client.get("/api/auth/invites").json()}
+    assert by_id[a["id"]] == "revoked" and by_id[b["id"]] == "pending"
+    token_a = _token_from(league_client.app.state.outbox[-2][2])
+    assert _fresh(league_client).get(f"/api/auth/invite/{token_a}").json()["reason"].startswith("This invite was cancelled")
+    assert league_client.delete(f"/api/auth/invites/{b['id']}").status_code == 204
+    assert league_client.post(f"/api/auth/invites/{b['id']}/resend").status_code == 409
+    assert _fresh(league_client).get("/api/auth/invite/not-a-real-token").json()["valid"] is False
+
+
+def test_cannot_invite_for_a_team_someone_already_manages(league_client):
+    r = league_client.post("/api/auth/invites", json={"team_id": 3, "email": "x@example.com"})
+    assert r.status_code == 409 and "commish" in r.json()["detail"]
+    assert league_client.post("/api/auth/invites", json={"team_id": 99, "email": "x@example.com"}).status_code == 404
+
+
+def test_invites_are_admin_only(league_client):
+    league_client.post("/api/auth/invites", json={"team_id": 8, "email": "eight@example.com"})
+    token = _token_from(league_client.app.state.outbox[-1][2])
+    friend = _fresh(league_client)
+    friend.post("/api/auth/join", json={"token": token, "username": "friend", "password": PW})
+    assert friend.get("/api/auth/invites").status_code == 403
+    assert friend.post("/api/auth/invites", json={"team_id": 9, "email": "nine@example.com"}).status_code == 403
+    assert friend.get("/api/auth/teams").status_code == 403
+
+
+def test_admin_can_reassign_a_team(league_client):
+    league_client.post("/api/auth/invites", json={"team_id": 5, "email": "five@example.com"})
+    token = _token_from(league_client.app.state.outbox[-1][2])
+    friend = _fresh(league_client)
+    friend.post("/api/auth/join", json={"token": token, "username": "friend", "password": PW})
+    fid = friend.get("/api/auth/me").json()["id"]
+    r = league_client.post(f"/api/auth/users/{fid}/team", json={"team_id": 7})
+    assert r.status_code == 200 and r.json()["team_id"] == 7
+    assert friend.get("/api/auth/me").json()["team_id"] == 7
+    assert friend.post(f"/api/auth/users/{fid}/team", json={"team_id": 8}).status_code == 403
+
+
+def test_expired_invite_is_refused(league_client):
+    from datetime import datetime, timedelta, timezone
+
+    league_client.post("/api/auth/invites", json={"team_id": 5, "email": "five@example.com"})
+    token = _token_from(league_client.app.state.outbox[-1][2])
+    store = league_client.app.state.auth.invites
+    item = store.by_token(token)
+    item.expires_at = datetime.now(timezone.utc) - timedelta(seconds=1)
+    store.save()
+    friend = _fresh(league_client)
+    assert friend.get(f"/api/auth/invite/{token}").json()["reason"].startswith("This invite has expired")
+    assert friend.post("/api/auth/join", json={"token": token, "username": "late", "password": PW}).status_code == 403
+
+
+def test_mail_info_tells_the_admin_how_invites_go_out(league_client):
+    info = league_client.get("/api/auth/mail").json()
+    assert info == {"configured": True, "provider": "resend", "sender": "FF <ff@test.co>", "reply_to": "", "sandbox": False}
+    league_client.app.state.auth.cfg.mail_from = "Aljux Fantasy <onboarding@resend.dev>"
+    assert league_client.get("/api/auth/mail").json()["sandbox"] is True
+    friend = _fresh(league_client)
+    assert friend.get("/api/auth/mail").status_code == 401
+
+
+def test_a_real_invite_to_yourself_still_makes_a_real_account(league_client):
+    """Not the recommended dry run (see test invites), but it must keep working."""
+    r = league_client.post("/api/auth/invites", json={"team_id": 9, "email": "commish@example.com"})
+    assert r.status_code == 200
+    token = _token_from(league_client.app.state.outbox[-1][2])
+    me_again = _fresh(league_client)
+    r = me_again.post("/api/auth/join", json={"token": token, "username": "commish-test", "password": PW})
+    assert r.status_code == 200 and r.json()["user"]["team_id"] == 9
+    # deleting the test account frees the team for a real invite
+    uid = r.json()["user"]["id"]
+    assert league_client.delete(f"/api/auth/users/{uid}").status_code == 204
+    assert league_client.post("/api/auth/invites", json={"team_id": 9, "email": "real@example.com"}).status_code == 200
+
+
+def test_test_invite_is_the_real_email_for_your_own_team_and_creates_nothing(league_client):
+    before = len(league_client.app.state.auth.users.users)
+    r = league_client.post("/api/auth/invites/test", json={"email": "commish@example.com"})
+    assert r.status_code == 200 and r.json()["test"] is True and r.json()["team_id"] == 3  # commish's own team
+    to, subject, body = league_client.app.state.outbox[-1]
+    assert to == "commish@example.com" and subject == "Your Test League fantasy football tool login"
+    token = _token_from(body)
+    # byte-for-byte the real email, for my own team: nothing in it says "test"
+    from ffdraft import mail
+
+    assert body == mail.invite_text("Test League", "Team Owner3", f"https://ff.example.com/join?token={token}", 14)[1]
+    # the join page looks exactly like the real one, apart from knowing it is a dry run
+    info = league_client.get(f"/api/auth/invite/{token}").json()
+    assert info["valid"] is True and info["team_name"] == "Team Owner3" and info["test"] is True
+    # same validation as the real thing
+    assert league_client.post("/api/auth/join", json={"token": token, "username": "commish", "password": PW}).status_code == 400
+    r = league_client.post("/api/auth/join", json={"token": token, "username": "dryrun", "password": PW})
+    assert r.status_code == 200 and r.json()["test"] is True and r.json()["user"] is None
+    assert "Nothing was created" in r.json()["message"] and "commish still manages it" in r.json()["message"]
+    assert len(league_client.app.state.auth.users.users) == before
+    assert league_client.get("/api/auth/me").json()["username"] == "commish"  # still signed in as myself
+    assert league_client.get(f"/api/auth/invite/{token}").json()["valid"] is False  # spent, like a real one
+    listed = league_client.get("/api/auth/invites").json()[0]
+    assert listed["status"] == "used" and listed["test"] is True and listed["used_by"] == "commish"
+
+
+def test_test_invite_does_not_disturb_a_real_pending_invite(league_client):
+    league_client.post("/api/auth/invites", json={"team_id": 5, "email": "five@example.com"})
+    league_client.post("/api/auth/invites/test", json={"email": "commish@example.com"})
+    statuses = {(i["team_id"], i["test"]): i["status"] for i in league_client.get("/api/auth/invites").json()}
+    assert statuses[(5, False)] == "pending" and statuses[(3, True)] == "pending"

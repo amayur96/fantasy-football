@@ -47,14 +47,16 @@ def board_view(
     setup: SetupOverrides,
     players_by_id: dict[int, Player],
     conflicts: list[SheetConflict] | None = None,
+    team_id: int | None = None,
 ) -> BoardView:
+    me = team_id if team_id is not None else settings.my_team_id
     header_for = {tid: h for h, tid in setup.sheet_columns.items() if tid}
     names = {t.team_id: t.name for t in settings.teams}
     owners = {t.team_id: (t.owner_names[0] if t.owner_names else "") for t in settings.teams}
     cols = [
         BoardColumn(
             team_id=tid, name=names.get(tid, str(tid)), owner=owners.get(tid, ""), color=team_color(tid, settings, setup),
-            header=header_for.get(tid, ""), is_me=tid == settings.my_team_id,
+            header=header_for.get(tid, ""), is_me=tid == me,
         )
         for tid in column_order(settings, setup, board)
     ]
@@ -69,8 +71,8 @@ def board_view(
             on_clock=clock is not None and clock.overall == p.overall,
         ))
     return BoardView(
-        season=settings.season, my_team_id=settings.my_team_id, rounds=settings.rounds, columns=cols, cells=cells,
-        on_the_clock=clock, picks_until_my_turn=board.picks_until_my_turn(), warnings=board.state.warnings,
+        season=settings.season, my_team_id=me, rounds=settings.rounds, columns=cols, cells=cells,
+        on_the_clock=clock, picks_until_my_turn=board.picks_until_my_turn(me), warnings=board.state.warnings,
         conflicts=conflicts or [],
     )
 

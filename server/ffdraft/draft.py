@@ -116,20 +116,26 @@ class DraftBoard:
     def taken_ids(self) -> set[int]:
         return {p.player_id for p in self.picks if p.player_id is not None}
 
-    def my_picks(self) -> list[DraftPick]:
-        return [p for p in self.picks if p.owner_team_id == self.state.my_team_id]
+    # "My" below means the signed-in user's team when one is given; the board's own my_team_id
+    # (the cookie owner's team) is only the default.
+    def _team(self, team_id: int | None) -> int:
+        return team_id if team_id is not None else self.state.my_team_id
 
-    def my_next_pick(self) -> DraftPick | None:
-        return next((p for p in self.my_picks() if p.player_id is None and not p.unknown), None)
+    def my_picks(self, team_id: int | None = None) -> list[DraftPick]:
+        me = self._team(team_id)
+        return [p for p in self.picks if p.owner_team_id == me]
 
-    def picks_until_my_turn(self) -> int | None:
-        nxt = self.my_next_pick()
+    def my_next_pick(self, team_id: int | None = None) -> DraftPick | None:
+        return next((p for p in self.my_picks(team_id) if p.player_id is None and not p.unknown), None)
+
+    def picks_until_my_turn(self, team_id: int | None = None) -> int | None:
+        nxt = self.my_next_pick(team_id)
         if nxt is None:
             return None
         return sum(1 for p in self.picks if p.overall < nxt.overall and p.player_id is None and not p.unknown)
 
-    def my_roster_ids(self) -> list[int]:
-        return [p.player_id for p in self.my_picks() if p.player_id is not None]
+    def my_roster_ids(self, team_id: int | None = None) -> list[int]:
+        return [p.player_id for p in self.my_picks(team_id) if p.player_id is not None]
 
     def user_picks_made(self) -> bool:
         return bool(self.state.history)
@@ -172,15 +178,16 @@ class DraftBoard:
         self.save()
         return pick
 
-    def record_pick(self, player_id: int, mine: bool = False, force: bool = False) -> DraftPick:
+    def record_pick(self, player_id: int, mine: bool = False, force: bool = False, team_id: int | None = None) -> DraftPick:
         if player_id in self.taken_ids():
             raise ConflictError("That player is already off the board")
         slot = self.next_open()
         if slot is None:
             raise ConflictError("The draft is complete")
-        if mine and slot.owner_team_id != self.state.my_team_id and not force:
+        me = self._team(team_id)
+        if mine and slot.owner_team_id != me and not force:
             raise ConflictError(f"Not your pick: pick {slot.overall} (R{slot.round}) belongs to another team. Shift-click to force.")
-        if not mine and slot.owner_team_id == self.state.my_team_id and not force:
+        if not mine and slot.owner_team_id == me and not force:
             raise ConflictError(f"Pick {slot.overall} is yours - use 'Mine' (or force) to record it.")
         self._push(slot)
         slot.player_id = player_id

@@ -162,7 +162,7 @@ export function KeeperCard() {
 
   const sorted = useMemo(() => sortOptions(options.data ?? []), [options.data]);
   const maxPts = useMemo(() => Math.max(0, ...sorted.map((o) => o.surplus_points ?? 0)), [sorted]);
-  const myKeeper = setup.data?.setup.my_keeper ?? null;
+  const myKeeper = setup.data?.my_keeper ?? null;
   const overrides = setup.data?.setup.keeper_cost_overrides ?? {};
   const best = sorted.find((o) => o.player && o.surplus_points !== null) ?? null;
 

@@ -421,7 +421,7 @@ class SlotRow(BaseModel):
     label: str  # display label: FLEX for RB/WR/TE
     key: str  # unique slot key like RB2
     player: WeekPlayer | None = None
-    recommended_player_id: int | None = None  # who the optimiser would put here
+    recommended_player_id: int | None = None  # who should be in this slot after the recommended moves
 
 
 class LineupMove(BaseModel):
@@ -431,8 +431,7 @@ class LineupMove(BaseModel):
     player_out: WeekPlayer | None = None
     delta: float = 0.0
     headline: str
-    quant: str
-    qual: str
+    why: str  # one paragraph: projections, expert agreement, matchups, health, usage
 
 
 class WeekView(BaseModel):
@@ -445,11 +444,69 @@ class WeekView(BaseModel):
     rows: list[SlotRow] = Field(default_factory=list)  # every slot in ESPN order, empties included
     starters: list[WeekPlayer] = Field(default_factory=list)
     bench: list[WeekPlayer] = Field(default_factory=list)
-    optimal_slots: dict[str, int] = Field(default_factory=dict)  # slot key like "RB2" -> player_id
+    # The lineup after applying `moves` — slot key like "RB2" -> player_id. Deliberately not the
+    # raw optimum: a slot only changes here when there is a move in `moves` explaining it.
+    optimal_slots: dict[str, int] = Field(default_factory=dict)
     current_total: float = 0.0
     optimal_total: float = 0.0
     moves: list[LineupMove] = Field(default_factory=list)
     waivers: list[LineupMove] = Field(default_factory=list)
+    sources: dict[str, str] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+
+
+# ---- week recap ------------------------------------------------------------------------
+
+
+class RecapPlayer(BaseModel):
+    """One lineup spot in a finished matchup, with what he did against what he was supposed to do."""
+    player_id: int
+    name: str
+    position: Position
+    pro_team: str = ""
+    slot: str  # ESPN slot that week: QB, RB, WR/TE, RB/WR/TE, D/ST, BE, IR ...
+    points: float = 0.0
+    projected: float = 0.0
+    opponent: str | None = None
+    opp_rank_vs_pos: int | None = None  # 1 = toughest defense vs his position
+    on_bye: bool = False
+    injury_status: str | None = None
+    game_played: bool = True
+    # (week, points, projected) for every scoring period so far this season, oldest first
+    history: list[tuple[int, float, float]] = Field(default_factory=list)
+
+
+class RecapNote(BaseModel):
+    headline: str
+    detail: str
+    player_id: int | None = None
+    source: str = "ESPN"  # ESPN, Sleeper, hindsight, ...
+    tone: Literal["good", "bad", "neutral"] = "neutral"
+
+
+class WeekRecap(BaseModel):
+    season: int
+    week: int
+    week_label: str
+    available: bool = True
+    reason: str = ""  # why there is nothing to recap
+    result: Literal["W", "L", "T", ""] = ""
+    my_team: str = ""
+    opponent: str = ""
+    record: str = ""  # W-L after this week
+    my_score: float = 0.0
+    opp_score: float = 0.0
+    my_projected: float = 0.0
+    opp_projected: float = 0.0
+    optimal_score: float = 0.0  # best lineup in hindsight
+    bench_points_left: float = 0.0
+    would_have_won: bool | None = None  # for a loss: would the hindsight lineup have flipped it
+    summary: str = ""  # the paragraph: what happened and why
+    right: list[RecapNote] = Field(default_factory=list)
+    wrong: list[RecapNote] = Field(default_factory=list)
+    lessons: list[RecapNote] = Field(default_factory=list)  # for next week and beyond
+    my_lineup: list[RecapPlayer] = Field(default_factory=list)
+    opp_lineup: list[RecapPlayer] = Field(default_factory=list)
     sources: dict[str, str] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
 

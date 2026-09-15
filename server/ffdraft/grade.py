@@ -39,7 +39,7 @@ def _needs(open_now: dict[str, int]) -> str:
     return ", ".join(gaps)
 
 
-def grade_board(board: DraftBoard, settings: LeagueSettings, setup: SetupOverrides, rankings: Rankings) -> BoardGrades:
+def grade_board(board: DraftBoard, settings: LeagueSettings, setup: SetupOverrides, rankings: Rankings, team_id: int | None = None) -> BoardGrades:
     total_picks = settings.rounds * settings.team_count
     curve = pick_curve(rankings, total_picks)
     filled = [p for p in board.picks if p.player_id is not None and p.player_id in rankings.by_id]
@@ -77,7 +77,7 @@ def grade_board(board: DraftBoard, settings: LeagueSettings, setup: SetupOverrid
         open_starters = {k: v for k, v in remaining.items() if k != "BE" and v > 0}
         row = TeamGrade(
             team_id=team.team_id, name=names.get(team.team_id, str(team.team_id)),
-            owner=owners.get(team.team_id, ""), is_me=team.team_id == settings.my_team_id,
+            owner=owners.get(team.team_id, ""), is_me=team.team_id == (team_id if team_id is not None else settings.my_team_id),
             picks_made=len(picks),
             total_value=sum(g.value for g in picks), expected_value=sum(g.expected for g in picks),
             edge=sum(g.edge for g in picks),

@@ -61,6 +61,9 @@ def create_app(ctx: AppContext | None = None, web_dist: Path = WEB_DIST) -> Fast
             app.state.ctx.load()
         except Exception as exc:  # noqa: BLE001
             log.warning("Initial load failed: %s", exc)
+        bound = app.state.auth.bind_owner(app.state.ctx.settings)
+        if bound:
+            log.info("Bound admin %r to the ESPN cookie owner's team", bound)
         yield
 
     app = FastAPI(title="ffdraft", lifespan=lifespan)

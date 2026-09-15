@@ -177,21 +177,24 @@ def keeper_options(
     settings: LeagueSettings,
     setup: SetupOverrides,
     curve: list[float],
+    team_id: int | None = None,
 ) -> list[KeeperOption]:
     T = settings.team_count
     names = {t.team_id: t.name for t in settings.teams}
-    my_slot = setup.my_slot
-    if my_slot is None and setup.order_confirmed and settings.draft_order and settings.my_team_id in settings.draft_order:
-        my_slot = settings.draft_order.index(settings.my_team_id) + 1
-    if setup.slot_order and settings.my_team_id in setup.slot_order:
-        my_slot = setup.slot_order.index(settings.my_team_id) + 1
+    me = team_id if team_id is not None else settings.my_team_id
+    # setup.my_slot is the cookie owner's manual slot; anyone else's slot comes from the order.
+    my_slot = setup.my_slot if me == settings.my_team_id else None
+    if my_slot is None and setup.order_confirmed and settings.draft_order and me in settings.draft_order:
+        my_slot = settings.draft_order.index(me) + 1
+    if setup.slot_order and me in setup.slot_order:
+        my_slot = setup.slot_order.index(me) + 1
     out: list[KeeperOption] = []
     for entry in roster:
         cost, source, years, history, warnings = compute_keeper_cost(
-            entry.player_id, drafts, settings.season, settings.rounds, settings.my_team_id, names,
+            entry.player_id, drafts, settings.season, settings.rounds, me, names,
             setup.keeper_cost_overrides.get(entry.player_id),
         )
-        slot_round, warn = keeper_slot_round(settings.my_team_id, cost, setup.pick_trades, settings.season, settings.rounds)
+        slot_round, warn = keeper_slot_round(me, cost, setup.pick_trades, settings.season, settings.rounds)
         if warn:
             warnings.append(warn)
         player = rankings.by_id.get(entry.player_id)

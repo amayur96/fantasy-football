@@ -93,6 +93,20 @@ class EspnClient:
 
         return cached(path, refresh, load, list[RosterEntry])
 
+    def fetch_team_roster(self, year: int, team_id: int, refresh: bool = False) -> list[RosterEntry]:
+        """Any team's roster for a season (the cookie reads the whole league), cached per team."""
+        path = self.data / f"roster_{year}_t{team_id}.json"
+
+        def load() -> list[RosterEntry]:
+            league = self._league(year)
+            team = next((t for t in league.teams if int(t.team_id) == team_id), None)
+            if team is None:
+                raise LookupError(f"No team {team_id} in the {year} league")
+            return parse.parse_roster(team, year)
+
+        value, _ = cached(path, refresh, load, list[RosterEntry])
+        return value
+
     def fetch_draft(self, year: int, refresh: bool = False) -> tuple[list[DraftHistoryPick], bool]:
         path = self.data / f"draft_{year}.json"
 

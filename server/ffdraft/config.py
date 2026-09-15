@@ -28,6 +28,21 @@ class Settings(BaseSettings):
     auth_secret: str = ""  # generated into data/auth_secret when blank
     session_days: int = 30
     allow_registration: bool = False  # when False, only admins can add users after the first
+    # Team invites go out by email only. APP_URL is what the link starts with (else the request's host).
+    app_url: str = ""
+    invite_days: int = 14
+    # Sender identity, e.g. 'Aljux Fantasy <invites@yourdomain.com>'. Resend only delivers from a
+    # domain you have verified there (onboarding@resend.dev works, but only to your own address).
+    mail_from: str = ""
+    mail_reply_to: str = ""  # optional; blank means replies are unwanted and the email says so
+    resend_api_key: str = ""  # preferred: one key, no server
+    # SMTP fallback, used only when there is no Resend key.
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""  # legacy alias for MAIL_FROM
+    smtp_starttls: bool = True
     cookie_secure: bool = False  # set True when serving over HTTPS
     # Creates this admin on startup when no accounts exist yet. On a public URL this closes the
     # window where the first stranger to load the site could claim the admin account.
@@ -39,6 +54,18 @@ class Settings(BaseSettings):
         p = self.data_dir if self.data_dir.is_absolute() else ROOT / self.data_dir
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @property
+    def sender(self) -> str:
+        return self.mail_from or self.smtp_from
+
+    @property
+    def mail_configured(self) -> bool:
+        return bool(self.sender) and bool(self.resend_api_key or self.smtp_host)
+
+    @property
+    def invites_path(self) -> Path:
+        return self.data_path / "invites.json"
 
     @property
     def has_credentials(self) -> bool:

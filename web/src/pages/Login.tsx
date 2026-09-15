@@ -54,7 +54,7 @@ export function Login() {
               ? "No accounts exist yet — this first one becomes the admin."
               : creating
                 ? "Pick a username and a password of at least 4 characters."
-                : "FF Draft Assistant"}
+                : "Fantasy football, all season."}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -124,6 +124,9 @@ export function Login() {
               >
                 {signingUp ? "Already have an account? Sign in" : "Need an account? Create one"}
               </button>
+            )}
+            {!canRegister && !firstRun && (
+              <p className="text-center text-xs text-muted-foreground">New here? Accounts come from an invite link sent by the tool's admin.</p>
             )}
           </form>
         </CardContent>

@@ -275,7 +275,12 @@ export interface SetupResponse {
   provisional: boolean;
   warnings: string[];
   teams: TeamInfo[];
+  /** The signed-in user's team (falls back to the cookie owner's until they pick one). */
   my_team_id: number;
+  /** Whose ESPN cookie the app syncs with; setup.my_keeper / my_slot belong to this team. */
+  owner_team_id: number;
+  /** The signed-in user's keeper, wherever setup stores it. */
+  my_keeper: KeeperEntry | null;
 }
 
 export interface KeepersBody {
@@ -527,8 +532,8 @@ export interface LineupMove {
   player_out: WeekPlayer | null;
   delta: number;
   headline: string;
-  quant: string;
-  qual: string;
+  /** One paragraph explaining the move: projections, expert agreement, matchups, health, usage. */
+  why: string;
 }
 
 export interface WeekView {
@@ -541,12 +546,67 @@ export interface WeekView {
   rows: SlotRow[];
   starters: WeekPlayer[];
   bench: WeekPlayer[];
+  /** Lineup after applying `moves` — a slot differs from the current one only when a move explains it. */
   optimal_slots: Record<string, number>; // slot key like "RB2" -> player_id
   current_total: number;
   optimal_total: number;
   moves: LineupMove[];
   waivers: LineupMove[];
   sources: Record<string, string>; // espn (ISO timestamp), fantasypros, borischen
+  errors: string[];
+}
+
+// ---- Week recap (GET /recap) ----
+
+export interface RecapPlayer {
+  player_id: number;
+  name: string;
+  position: Position;
+  pro_team: string;
+  slot: string;
+  points: number;
+  projected: number;
+  opponent: string | null;
+  opp_rank_vs_pos: number | null;
+  on_bye: boolean;
+  injury_status: string | null;
+  game_played: boolean;
+  /** [week, points, projected] for each scoring period so far, oldest first. */
+  history: [number, number, number][];
+}
+
+export interface RecapNote {
+  headline: string;
+  detail: string;
+  player_id: number | null;
+  source: string;
+  tone: "good" | "bad" | "neutral";
+}
+
+export interface WeekRecap {
+  season: number;
+  week: number;
+  week_label: string;
+  available: boolean;
+  reason: string;
+  result: "W" | "L" | "T" | "";
+  my_team: string;
+  opponent: string;
+  record: string;
+  my_score: number;
+  opp_score: number;
+  my_projected: number;
+  opp_projected: number;
+  optimal_score: number;
+  bench_points_left: number;
+  would_have_won: boolean | null;
+  summary: string;
+  right: RecapNote[];
+  wrong: RecapNote[];
+  lessons: RecapNote[];
+  my_lineup: RecapPlayer[];
+  opp_lineup: RecapPlayer[];
+  sources: Record<string, string>;
   errors: string[];
 }
 

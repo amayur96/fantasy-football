@@ -25,6 +25,7 @@ import type {
   SlotBody,
   StrategyGuide,
   SyncReport,
+  WeekRecap,
   WeekView,
 } from "./types";
 
@@ -41,6 +42,7 @@ export const keys = {
   grades: ["boardGrades"] as const,
   sheetStatus: ["sheetStatus"] as const,
   week: (week?: number) => ["week", week ?? "current"] as const,
+  recap: (week?: number) => ["recap", week ?? "latest"] as const,
   strategy: ["strategy"] as const,
 };
 
@@ -154,6 +156,16 @@ export function useWeek(week?: number) {
     queryFn: () => apiGet<WeekView>(weekPath(week)),
     retry: retryUnlessNotSynced,
     staleTime: 60_000,
+  });
+}
+
+/** Recap of the most recent finished week at or before `week` (latest when omitted). */
+export function useRecap(week?: number) {
+  return useQuery({
+    queryKey: keys.recap(week),
+    queryFn: () => apiGet<WeekRecap>(`/recap${week !== undefined ? `?week=${week}` : ""}`),
+    retry: retryUnlessNotSynced,
+    staleTime: 5 * 60_000,
   });
 }
 

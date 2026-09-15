@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from ffdraft.config import Settings
 from ffdraft.models import DraftHistoryPick, LeagueSettings, Player, RosterEntry, SetupOverrides, TeamInfo
 from ffdraft.value import build_rankings
 
@@ -77,3 +78,9 @@ def roster() -> list[RosterEntry]:
 @pytest.fixture
 def setup() -> SetupOverrides:
     return SetupOverrides(my_slot=3)
+
+
+@pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Tests build their own Settings; the developer's real .env (ESPN cookie, mail keys) must not leak in."""
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
