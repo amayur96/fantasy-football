@@ -16,7 +16,8 @@ log = logging.getLogger(__name__)
 BASE = "https://api.sleeper.app/v1"
 PLAYERS_TTL = timedelta(days=1)
 TREND_TTL = timedelta(hours=1)
-KEEP = ("full_name", "position", "team", "espn_id", "injury_status", "injury_body_part", "injury_notes", "practice_participation", "practice_description", "depth_chart_order", "news_updated", "search_rank")
+KEEP = ("full_name", "position", "team", "espn_id", "rotowire_id", "injury_status", "injury_body_part", "injury_notes", "practice_participation", "practice_description", "depth_chart_order", "news_updated", "search_rank")
+PLAYERS_VERSION = 2  # bump when KEEP grows, so a day-old cache without the new fields is refetched
 
 
 def _get(url: str, timeout: int = 30) -> Any:
@@ -38,7 +39,7 @@ def load_or_fetch_players(cfg: Settings, refresh: bool = False) -> dict[str, dic
     """Sleeper id -> trimmed player record. Only players with a fantasy position are kept."""
     path = cfg.data_path / "sleeper_players.json"
     cached = read_json(path)
-    if _fresh(cached, PLAYERS_TTL) and not refresh:
+    if _fresh(cached, PLAYERS_TTL) and not refresh and cached.get("version") == PLAYERS_VERSION:
         return cached["players"]
     try:
         raw = _get(f"{BASE}/players/nfl", timeout=90)
@@ -51,7 +52,7 @@ def load_or_fetch_players(cfg: Settings, refresh: bool = False) -> dict[str, dic
         for pid, rec in raw.items()
         if isinstance(rec, dict) and rec.get("position") in ("QB", "RB", "WR", "TE", "K", "DEF")
     }
-    write_json(path, {"fetched_at": datetime.now(timezone.utc).isoformat(), "players": players})
+    write_json(path, {"fetched_at": datetime.now(timezone.utc).isoformat(), "version": PLAYERS_VERSION, "players": players})
     return players
 
 
@@ -73,3 +74,15 @@ def load_or_fetch_trending(cfg: Settings, kind: str, refresh: bool = False, hour
 
 def by_espn_id(players: dict[str, dict[str, Any]]) -> dict[int, dict[str, Any]]:
     return {int(rec["espn_id"]): rec for rec in players.values() if rec.get("espn_id")}
+
+
+def by_rotowire_id(players: dict[str, dict[str, Any]]) -> dict[int, int]:
+    """Rotowire id -> ESPN id, the bridge for Rotowire's tables."""
+    out: dict[int, int] = {}
+    for rec in players.values():
+        if rec.get("rotowire_id") and rec.get("espn_id"):
+            try:
+                out[int(rec["rotowire_id"])] = int(rec["espn_id"])
+            except (TypeError, ValueError):
+                continue
+    return out

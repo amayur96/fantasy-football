@@ -56,7 +56,7 @@ function formatFetched(iso: string | undefined): string | null {
   return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function NumCell({ children, className }: { children: React.ReactNode; className?: string }) {
+export function NumCell({ children, className }: { children: React.ReactNode; className?: string }) {
   return <TableCell className={cn("num text-right", className)}>{children}</TableCell>;
 }
 
@@ -82,7 +82,7 @@ function FpCell({ p }: { p: WeekPlayer }) {
   );
 }
 
-function PlayerCell({ p }: { p: WeekPlayer | null }) {
+export function PlayerCell({ p }: { p: WeekPlayer | null }) {
   return (
     <TableCell className="min-w-56">
       <div className="flex items-center gap-2.5">
@@ -193,7 +193,7 @@ function GroupHead({ children, colSpan, className }: { children: React.ReactNode
   );
 }
 
-function ColHead({ children, right, tip }: { children: React.ReactNode; right?: boolean; tip?: string }) {
+export function ColHead({ children, right, tip }: { children: React.ReactNode; right?: boolean; tip?: string }) {
   const inner = tip ? (
     <Tooltip>
       <TooltipTrigger asChild>

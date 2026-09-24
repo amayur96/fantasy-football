@@ -398,6 +398,103 @@ class AppContext:
             league_fa_ids=fa_ids, sources=sources, errors=errors,
         )
 
+    # ---- waiver wire ------------------------------------------------------
+    def waiver_view(self, week: int | None = None, refresh: bool = False, team_id: int | None = None) -> "WaiverView":
+        """Every free agent worth a look for this team, with a drop and the reasoning, from every
+        source that answers. Each source is optional: a failure lands in `errors`, the engine
+        renormalises around it, and the page still renders."""
+        from datetime import datetime, timezone
+
+        from . import sleeper, waiver_sources, waivers, weekly
+        from .external import is_superflex
+        from .lineup import weekly_score
+        from .models import WaiverPlayer
+
+        s = self.require_ready()
+        me = team_id if team_id is not None else s.my_team_id
+        try:
+            data = weekly.load_or_fetch_espn_week(self.cfg, me, week, refresh)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"ESPN weekly data: {exc}") from exc
+        wk, cur = int(data["week"]), int(data.get("current_week") or 0)
+        fetched_at = datetime.fromisoformat(data["fetched_at"]) if isinstance(data.get("fetched_at"), str) else datetime.now(timezone.utc)
+        roster = [WaiverPlayer(**r) for r in data["roster"]]
+        fas = [WaiverPlayer(**f) for f in data["free_agents"]]
+        if cur <= 0:
+            return waivers.unavailable(self.cfg.season, wk, "The waiver wire opens once the regular season starts.", fetched_at)
+        if not roster:
+            return waivers.unavailable(self.cfg.season, wk, "ESPN returned an empty roster for your team.", fetched_at)
+        everyone = roster + fas
+        errors: list[str] = []
+        sources: dict[str, str] = {"espn": data["fetched_at"]}
+        loaded: set[str] = set()
+        try:
+            fp = weekly.load_or_fetch_fp_weekly(self.cfg, s, is_superflex(s), refresh)
+            weekly.apply_fp_weekly(everyone, fp)
+            sources["fantasypros_week"] = f"week {fp.get('week')} \u00b7 {fp.get('experts')} experts"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"FantasyPros weekly: {exc}")
+        fp_slug: str | None = None
+        try:
+            ros = waiver_sources.load_or_fetch_fp_ros(self.cfg, s, refresh)
+            n = waiver_sources.apply_fp_ros(everyone, ros)
+            loaded.add(waivers.SOURCE_FP_ROS)
+            sources["fantasypros_ros"] = f"{ros.get('experts')} experts \u00b7 updated {ros.get('updated')} \u00b7 {n} matched"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"FantasyPros rest-of-season: {exc}")
+        try:
+            ww = waiver_sources.load_or_fetch_fp_waiver(self.cfg, s, refresh)
+            n = waiver_sources.apply_fp_waiver(everyone, ww)
+            loaded.add(waivers.SOURCE_FP_WAIVER)
+            fp_slug = ww.get("slug")
+            sources["fantasypros_waiver"] = f"week {ww.get('week')} \u00b7 {ww.get('experts')} experts \u00b7 {n} of {len(ww.get('players', []))} matched"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"FantasyPros waiver wire: {exc}")
+        rw_to_espn: dict[int, int] = {}
+        try:
+            sl = sleeper.load_or_fetch_players(self.cfg, refresh)
+            adds = sleeper.load_or_fetch_trending(self.cfg, "add", refresh)
+            drops = sleeper.load_or_fetch_trending(self.cfg, "drop", refresh)
+            n = waiver_sources.apply_sleeper(everyone, sleeper.by_espn_id(sl), adds, drops, sl)
+            rw_to_espn = sleeper.by_rotowire_id(sl)
+            loaded.add(waivers.SOURCE_SLEEPER)
+            sources["sleeper"] = f"{len(adds)} trending adds, {len(drops)} drops \u00b7 notes for {n} players"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Sleeper: {exc}")
+        try:
+            moves = waiver_sources.load_or_fetch_rotowire_moves(self.cfg, wk, refresh)
+            injuries: list[dict] = []
+            try:
+                injuries = waiver_sources.load_or_fetch_rotowire_injuries(self.cfg, refresh).get("rows", [])
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"Rotowire injuries: {exc}")
+            a, d, i = waiver_sources.apply_rotowire(everyone, moves, injuries, rw_to_espn)
+            loaded.add(waivers.SOURCE_ROTOWIRE)
+            sources["rotowire"] = f"week {moves.get('week')} \u00b7 {a} adds, {d} drops, {i} injuries matched"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"Rotowire: {exc}")
+        try:
+            snaps = waiver_sources.load_or_fetch_snaps(self.cfg, refresh)
+            n = waiver_sources.apply_snaps(everyone, snaps.get("snaps", {}), wk)
+            loaded.add(waivers.SOURCE_SNAPS)
+            sources["nflverse"] = f"snap counts \u00b7 {n} matched"
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"nflverse snap counts: {exc}")
+        waiver_sources.apply_bye_weeks(everyone, self.players_by_id)
+        if self.external is not None:
+            for p in everyone:
+                er = self.external.ranks.get(p.player_id)
+                if er and er.bc_tier:
+                    p.bc_tier = er.bc_tier
+        for p in everyone:
+            p.score = weekly_score(p)
+        keeper = self.keeper_for(me)
+        return waivers.build_waiver_view(
+            roster, fas, s, season=self.cfg.season, week=wk, fetched_at=fetched_at, loaded=loaded,
+            keeper_id=keeper.player_id if keeper else None, links=waiver_sources.links(fp_slug, wk), sources=sources, errors=errors,
+            faab=s.faab, faab_budget=s.faab_budget,
+        )
+
     # ---- weekly lineup ----------------------------------------------------
     def week_view(self, week: int | None = None, refresh: bool = False, team_id: int | None = None) -> "WeekView":
         from datetime import datetime, timezone

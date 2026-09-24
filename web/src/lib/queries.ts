@@ -25,6 +25,7 @@ import type {
   SlotBody,
   StrategyGuide,
   SyncReport,
+  WaiverView,
   WeekRecap,
   WeekView,
 } from "./types";
@@ -43,6 +44,7 @@ export const keys = {
   sheetStatus: ["sheetStatus"] as const,
   week: (week?: number) => ["week", week ?? "current"] as const,
   recap: (week?: number) => ["recap", week ?? "latest"] as const,
+  waivers: (week?: number) => ["waivers", week ?? "current"] as const,
   strategy: ["strategy"] as const,
 };
 
@@ -189,6 +191,39 @@ export function useRefreshWeek(week?: number) {
       qc.setQueryData(keys.week(week), view);
       // The refreshed payload is also the answer for its own numbered week.
       if (week === undefined) qc.setQueryData(keys.week(view.week), view);
+    },
+    onError: (err) => toast.error("Refresh failed", { description: errorMessage(err) }),
+  });
+}
+
+export function waiversPath(week: number | undefined, refresh = false): string {
+  const sp = new URLSearchParams();
+  if (week !== undefined) sp.set("week", String(week));
+  if (refresh) sp.set("refresh", "true");
+  const qs = sp.toString();
+  return `/waivers${qs ? `?${qs}` : ""}`;
+}
+
+/** Free agents worth a claim for my team, with drops and reasoning. The first load after a cache
+ *  expires goes to FantasyPros, Rotowire, Sleeper and nflverse, so it can take a while. */
+export function useWaivers(week?: number) {
+  return useQuery({
+    queryKey: keys.waivers(week),
+    queryFn: () => apiGet<WaiverView>(waiversPath(week)),
+    retry: retryUnlessNotSynced,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useRefreshWaivers(week?: number) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiGet<WaiverView>(waiversPath(week, true)),
+    onSuccess: (view) => {
+      qc.setQueryData(keys.waivers(week), view);
+      if (week === undefined) qc.setQueryData(keys.waivers(view.week), view);
+      // The refreshed ESPN week is shared with the dashboard, so its cache is stale too.
+      qc.invalidateQueries({ queryKey: keys.week(week) });
     },
     onError: (err) => toast.error("Refresh failed", { description: errorMessage(err) }),
   });

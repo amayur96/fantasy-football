@@ -100,10 +100,23 @@ POS_WORD = {"QB": "quarterbacks", "RB": "running backs", "WR": "receivers", "TE"
 # when the data behind it is missing, so the paragraph never asserts what it cannot back.
 
 
+SUFFIXES = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv", "v"}
+
+
+def _surname(name: str) -> str:
+    """'Michael Pittman Jr.' -> 'Pittman'; a defense keeps its whole name."""
+    parts = name.split()
+    if not parts or "D/ST" in parts:
+        return name
+    while len(parts) > 1 and parts[-1].lower() in SUFFIXES:
+        parts.pop()
+    return parts[-1]
+
+
 def _names(pin: WeekPlayer, pout: WeekPlayer | None) -> tuple[str, str]:
     """Surnames for the pair, or full names when the surnames collide and would read as one man."""
-    a = pin.name.split()[-1]
-    b = pout.name.split()[-1] if pout else ""
+    a = _surname(pin.name)
+    b = _surname(pout.name) if pout else ""
     if pout is not None and a == b:
         return pin.name, pout.name
     return a, b
@@ -111,7 +124,10 @@ def _names(pin: WeekPlayer, pout: WeekPlayer | None) -> tuple[str, str]:
 
 def _sentence(text: str) -> str:
     text = text.strip()
-    return (text[0].upper() + text[1:] + ".") if text else ""
+    if not text:
+        return ""
+    ends = text[-1] in ".!?" or (text[-1] in "\u201d\"" and len(text) > 1 and text[-2] in ".!?")
+    return text[0].upper() + text[1:] + ("" if ends else ".")
 
 
 def _status(p: WeekPlayer, who: str) -> str:

@@ -513,6 +513,23 @@ export interface WeekPlayer {
   percent_owned: number | null;
   percent_started: number | null;
   on_my_team: boolean;
+  /** ESPN's 7-day change in roster share. */
+  percent_change: number | null;
+  /** FREEAGENT or WAIVERS in the free-agent pool; null on a roster. */
+  waiver_status: string | null;
+  /** The last few played weeks, oldest first. */
+  usage: UsageWeek[];
+}
+
+export interface UsageWeek {
+  week: number;
+  points: number | null;
+  targets: number | null;
+  receptions: number | null;
+  carries: number | null;
+  pass_att: number | null;
+  /** Offensive snap share 0-1, from nflverse. */
+  snap_pct: number | null;
 }
 
 export interface SlotRow {
@@ -553,6 +570,78 @@ export interface WeekView {
   moves: LineupMove[];
   waivers: LineupMove[];
   sources: Record<string, string>; // espn (ISO timestamp), fantasypros, borischen
+  errors: string[];
+}
+
+// ---- Waiver wire (GET /waivers) ----
+
+/** A WeekPlayer with every waiver source joined on. */
+export interface WaiverPlayer extends WeekPlayer {
+  bye_week: number | null;
+  ros_rank: number | null;
+  ros_pos_rank: string | null; // "RB24"
+  ros_best: number | null;
+  ros_worst: number | null;
+  fp_waiver_rank: number | null;
+  fp_faab: string | null; // "$15"
+  fp_note: string | null;
+  fp_waiver_owned: number | null;
+  sleeper_adds: number | null;
+  sleeper_drops: number | null;
+  sleeper_injury: string | null;
+  sleeper_body_part: string | null;
+  sleeper_practice: string | null;
+  sleeper_notes: string | null;
+  depth_chart_order: number | null;
+  rw_add_pct: number | null;
+  rw_drop_pct: number | null;
+  rw_injury: string | null;
+  rw_status: string | null;
+  snap_pct: number | null; // 0-1
+  protected: boolean;
+  add_score: number; // 0-100
+  components: Record<string, number>; // component -> 0..1
+  missing: string[];
+}
+
+export type WaiverTier = "claim" | "stash" | "watch";
+
+export interface WaiverPick {
+  tier: WaiverTier;
+  player: WaiverPlayer;
+  drop: WaiverPlayer | null;
+  delta: number;
+  headline: string;
+  why: string;
+  sources: string[];
+}
+
+export interface DropCandidate {
+  player: WaiverPlayer;
+  droppability: number;
+  why: string;
+}
+
+export interface WaiverLink {
+  label: string;
+  url: string;
+  note: string;
+}
+
+export interface WaiverView {
+  season: number;
+  week: number;
+  week_label: string;
+  fetched_at: string;
+  available: boolean;
+  reason: string;
+  faab: boolean | null;
+  faab_budget: number | null;
+  picks: WaiverPick[];
+  drops: DropCandidate[]; // the whole bench, most droppable first
+  needs: string[];
+  links: WaiverLink[];
+  sources: Record<string, string>;
   errors: string[];
 }
 

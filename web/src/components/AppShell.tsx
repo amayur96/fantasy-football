@@ -11,7 +11,10 @@ import { useSettings } from "@/lib/queries";
 import { useTheme } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-const NAV = [{ to: "/", label: "Dashboard" }];
+const NAV = [
+  { to: "/", label: "Dashboard" },
+  { to: "/waivers", label: "Waiver Wire" },
+];
 
 const DRAFT_TOOLS = [
   { to: "/draft", label: "Live Draft", icon: ZapIcon, hint: "Pick-by-pick board with recommendations", end: true },

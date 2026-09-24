@@ -42,13 +42,13 @@ this is a single-instance app by design (Render runs one instance because the se
 The data flow is layered and one-directional:
 
 ```
-ESPN / Google Sheet / FantasyPros / Boris Chen / Sleeper
-        ↓  (espn/client.py, weekly.py, sheets.py, external.py, sleeper.py — all write JSON into data/)
+ESPN / Google Sheet / FantasyPros / Boris Chen / Sleeper / Rotowire / nflverse
+        ↓  (espn/client.py, weekly.py, sheets.py, external.py, sleeper.py, waiver_sources.py — all write JSON into data/)
    ctx.load()      reads only from disk, never the network
         ↓
    ctx.recompute() → build_rankings() (value.py) + DraftBoard.load_or_build() (draft.py)
         ↓
-   pure engines: keeper.py, recommend.py, grade.py, lineup.py, recap.py, strategy.py, detail.py, injury.py
+   pure engines: keeper.py, recommend.py, grade.py, lineup.py, recap.py, waivers.py, strategy.py, detail.py, injury.py
         ↓
    api.py routes → Pydantic models (models.py) → JSON
 ```
@@ -124,6 +124,39 @@ public, keyless API for add/drop trends and practice reports, matched to ESPN pl
 reason while that week is still being played — it never substitutes the previous week, so the recap
 always sits with its own week in the dashboard's week selector.
 
+### Waiver wire
+
+`AppContext.waiver_view()` is the in-season "who to add, who to drop" page. It reads the same
+`week_{season}_t{team}_*.json` as the dashboard, so the free-agent pool is built once in
+`weekly._fetch_free_agents()`: one `kona_player_info` pull per position plus a "risers" pull sorted
+by 7-day roster change, keeping ESPN's raw entry so `percent_change` and `waiver_status` survive
+(espn_api's `Player` discards them). The two `filterStats*` keys in `_fa_filter()` matter: without
+them ESPN returns only season totals and the current week, and `WeekPlayer.usage` (targets, carries,
+attempts for the last three played weeks) stays empty for every free agent. Kickers are dropped at
+the source; the league has no K slot.
+
+`waiver_sources.py` follows the `weekly.py` split: `load_or_fetch_*` fetch with their own TTL and
+stale fallback (FantasyPros waiver panel 6h and rest-of-season 12h, Rotowire add/drop 6h and
+injuries 3h, nflverse snap counts 24h), and `apply_*` are pure joins onto `WaiverPlayer`s. Joins are
+by id where a source carries one (Sleeper `espn_id`, Rotowire `playerID` via Sleeper `rotowire_id`)
+and by name within position otherwise; Sleeper's `espn_id` is missing for roughly half its records
+(rookies especially), which is why `sleeper_index()` exists. FantasyPros has no superflex
+rest-of-season list (`ros-superflex` redirects), so QB ranks come from a 1-QB list and the engine
+takes the kinder of overall and position rank for quarterbacks in a 2-QB league. Establish The Run
+and PFF are paywalled and appear only as links. `sleeper.PLAYERS_VERSION` must be bumped whenever
+`sleeper.KEEP` grows, or a day-old cache silently lacks the new field.
+
+`waivers.py` never fetches. It takes the set of sources that actually loaded: a missing source is an
+*absent* component (the weights renormalise), not a zero, so a FantasyPros outage does not drag
+everyone down. Free agents and bench players are scored with the same `add_score()` on one 0-100
+scale, which is what makes "add X, drop Y" mean something; the FantasyPros waiver panel is absent
+rather than zero for rostered players for the same reason. Rest-of-season value uses the *overall*
+consensus rank scaled to how many players the league rosters, because position ranks made a TE
+ranked 157th overall look better than a WR ranked 117th. Defenses only ever swap for the defense
+you start (`stream_candidates`), never for a skill player. A "claim" is a clear margin over a bench
+player or a strong score on its own; expect mostly "watch" in a 10-team league, that is the honest
+answer.
+
 ### Auth
 
 Every `/api` route is behind `Depends(current_user)`, wired once in `create_app()`. Accounts live in
@@ -160,7 +193,8 @@ split (static site + API) with a rewrite so the session cookie stays first-party
 React 19 + React Router, TanStack Query, shadcn/ui on Tailwind 4.
 
 `App.tsx` holds the whole route table. The top-level nav is deliberately only **Dashboard** (the
-season-long weekly lineup) and a **Draft Tools** dropdown; the draft-day tools are routes under
+season-long weekly lineup), **Waiver Wire** (`/waivers`, the in-season add/drop page) and a
+**Draft Tools** dropdown; the draft-day tools are routes under
 `/draft` (Live Draft), `/draft/board` and `/draft/keepers`, reached from that menu (`DRAFT_TOOLS` in
 `AppShell.tsx`) rather than from a second row of tabs. The pre-move paths `/board` and `/keeper`
 redirect, so old bookmarks keep working. `LiveDraft` sizes its panes against the viewport by
