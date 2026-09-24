@@ -91,6 +91,8 @@ def parse_settings(league: Any, swid: str, season: int, draft_order: list[int] |
         my_team_name=me.team_name,
         keeper_count=int(getattr(st, "keeper_count", 1) or 1),
         draft_order=draft_order,
+        faab=bool(st.faab) if getattr(st, "faab", None) is not None else None,
+        faab_budget=int(st.acquisition_budget) if getattr(st, "faab", None) else None,
         synced_at=datetime.now(timezone.utc),
     )
 

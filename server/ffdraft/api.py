@@ -17,7 +17,7 @@ from .grade import grade_board
 from . import injury as injury_engine
 from .detail import build_detail
 from .strategy import build_guide
-from .models import BoardGrades, BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WeekRecap, WeekView
+from .models import BoardGrades, BoardView, StrategyGuide, DraftView, KeeperEntry, PickTrade, PlayerDetail, RankedPlayer, Recommendation, SheetConflict, SheetStatus, SheetSyncReport, WaiverView, WeekRecap, WeekView
 
 router = APIRouter(prefix="/api")
 
@@ -447,6 +447,17 @@ def get_week(request: Request, week: int | None = None, refresh: bool = False, u
     c = ctx(request)
     try:
         return c.week_view(week=week, refresh=refresh, team_id=c.team_for(user))
+    except LookupError:
+        raise
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.get("/waivers", response_model=WaiverView)
+def get_waivers(request: Request, week: int | None = None, refresh: bool = False, user: User = Depends(current_user)) -> WaiverView:
+    c = ctx(request)
+    try:
+        return c.waiver_view(week=week, refresh=refresh, team_id=c.team_for(user))
     except LookupError:
         raise
     except RuntimeError as exc:

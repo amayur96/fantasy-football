@@ -273,3 +273,61 @@ def test_board_order_exposes_a_stale_board(client):
     s = client.get("/api/setup").json()
     assert s["slot_order"] == [10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
     assert s["board_slot_order"] != s["slot_order"]  # the card can now see the divergence
+
+
+def _fa(pid, name, pos, season, **kw):
+    return {"player_id": pid, "name": name, "position": pos, "slot": "FA", "season_proj": season, "percent_owned": 20.0, "on_my_team": False, **kw}
+
+
+def _week_payload(current_week):
+    roster = [
+        {"player_id": 1, "name": "QB Player 1", "position": "QB", "slot": "QB", "season_proj": 300}, {"player_id": 2, "name": "QB Player 2", "position": "QB", "slot": "QB", "season_proj": 250},
+        {"player_id": 3, "name": "RB Player 1", "position": "RB", "slot": "RB", "season_proj": 200}, {"player_id": 4, "name": "RB Player 2", "position": "RB", "slot": "RB", "season_proj": 180},
+        {"player_id": 5, "name": "WR Player 1", "position": "WR", "slot": "WR", "season_proj": 190}, {"player_id": 6, "name": "TE Player 1", "position": "TE", "slot": "TE", "season_proj": 120},
+        {"player_id": 7, "name": "RB Player 9", "position": "RB", "slot": "BE", "season_proj": 40, "percent_started": 1.0}, {"player_id": 8, "name": "WR Player 9", "position": "WR", "slot": "BE", "season_proj": 50},
+    ]
+    fas = [_fa(100, "FA Back", "RB", 170, pro_team="SEA", percent_change=9.0, waiver_status="WAIVERS"), _fa(101, "FA Wideout", "WR", 120), _fa(102, "FA Kicker", "K", 140)]
+    return {"week": 3, "current_week": current_week, "season": 2026, "roster": roster, "free_agents": fas, "opponent_name": "Owner4", "fetched_at": "2026-09-24T12:00:00+00:00"}
+
+
+def _patch_sources(monkeypatch, current_week=3, fail=None):
+    from ffdraft import sleeper, waiver_sources, weekly
+
+    monkeypatch.setattr(weekly, "load_or_fetch_espn_week", lambda cfg, team, week, refresh: _week_payload(current_week))
+    monkeypatch.setattr(weekly, "load_or_fetch_fp_weekly", lambda cfg, s, sf, refresh: {"pages": {}, "week": 3, "experts": 10})
+    ros = {"players": [{"player_name": "FA Back", "player_position_id": "RB", "rank_ecr": 30}, {"player_name": "RB Player 9", "player_position_id": "RB", "rank_ecr": 200}], "experts": 6, "updated": "9/23"}
+    monkeypatch.setattr(waiver_sources, "load_or_fetch_fp_ros", lambda cfg, s, refresh: ros)
+
+    def waiver_page(cfg, s, refresh):
+        if fail == "fp_waiver":
+            raise RuntimeError("HTTP 503")
+        return {"slug": "waiver-wire-overall", "players": [{"player_name": "FA Back", "player_position_id": "RB", "rank_ecr": 2, "tag": "$20", "note": "Go get him."}], "week": 3, "experts": 11}
+
+    monkeypatch.setattr(waiver_sources, "load_or_fetch_fp_waiver", waiver_page)
+    monkeypatch.setattr(sleeper, "load_or_fetch_players", lambda cfg, refresh=False: {"9": {"espn_id": 100, "rotowire_id": 77, "full_name": "FA Back"}})
+    monkeypatch.setattr(sleeper, "load_or_fetch_trending", lambda cfg, kind, refresh=False, **kw: [{"player_id": "9", "count": 50000}] if kind == "add" else [])
+    monkeypatch.setattr(waiver_sources, "load_or_fetch_rotowire_moves", lambda cfg, week, refresh=False: {"week": week, "added": [{"rotowire_id": 77, "name": "FA Back", "team": "SEA", "pos": "RB", "change": 25.0}], "dropped": []})
+    monkeypatch.setattr(waiver_sources, "load_or_fetch_rotowire_injuries", lambda cfg, refresh=False: {"rows": []})
+    monkeypatch.setattr(waiver_sources, "load_or_fetch_snaps", lambda cfg, refresh=False: {"snaps": {"fa back|SEA": [[2, 40, 0.7]]}})
+
+
+def test_waivers_route(client, monkeypatch):
+    _patch_sources(monkeypatch, fail="fp_waiver")
+    r = client.get("/api/waivers")
+    assert r.status_code == 200, r.text
+    v = r.json()
+    assert v["available"] is True and v["week"] == 3
+    assert any(e.startswith("FantasyPros waiver wire: HTTP 503") for e in v["errors"])
+    names = [pk["player"]["name"] for pk in v["picks"]]
+    assert "FA Back" in names and "FA Kicker" not in names
+    back = next(pk for pk in v["picks"] if pk["player"]["name"] == "FA Back")
+    assert back["drop"]["name"] == "RB Player 9" and "FA Back" in back["why"] and back["player"]["fp_waiver_rank"] is None
+    assert back["player"]["ros_pos_rank"] == "RB1" and back["player"]["sleeper_adds"] == 50000 and back["player"]["rw_add_pct"] == 25.0 and back["player"]["snap_pct"] == 0.7
+    assert "fantasypros_ros" in v["sources"] and "rotowire" in v["sources"] and "nflverse" in v["sources"] and "fantasypros_waiver" not in v["sources"]
+    assert len(v["links"]) == 4 and v["drops"]
+
+
+def test_waivers_route_preseason(client, monkeypatch):
+    _patch_sources(monkeypatch, current_week=0)
+    v = client.get("/api/waivers").json()
+    assert v["available"] is False and "regular season" in v["reason"] and v["picks"] == []

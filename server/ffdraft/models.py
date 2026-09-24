@@ -38,6 +38,8 @@ class LeagueSettings(BaseModel):
     my_team_name: str
     keeper_count: int = 1
     draft_order: list[int] | None = None
+    faab: bool | None = None  # True when waivers are a blind bidding budget; None until the next sync-refresh
+    faab_budget: int | None = None
     synced_at: datetime
 
 
@@ -386,6 +388,17 @@ class ExternalData(BaseModel):
 # ---- weekly lineup ----------------------------------------------------------------
 
 
+class UsageWeek(BaseModel):
+    """One played week of opportunity, from ESPN's stat breakdown plus nflverse snap counts."""
+    week: int
+    points: float | None = None
+    targets: int | None = None
+    receptions: int | None = None
+    carries: int | None = None
+    pass_att: int | None = None
+    snap_pct: float | None = None  # offensive snap share 0-1, filled from nflverse
+
+
 class WeekPlayer(BaseModel):
     player_id: int
     name: str
@@ -414,6 +427,9 @@ class WeekPlayer(BaseModel):
     percent_owned: float | None = None
     percent_started: float | None = None
     on_my_team: bool = True
+    percent_change: float | None = None  # ESPN's 7-day change in roster share
+    waiver_status: str | None = None  # FREEAGENT or WAIVERS for the free-agent pool; None on a roster
+    usage: list[UsageWeek] = Field(default_factory=list)  # the last few played weeks, oldest first
 
 
 class SlotRow(BaseModel):
@@ -451,6 +467,86 @@ class WeekView(BaseModel):
     optimal_total: float = 0.0
     moves: list[LineupMove] = Field(default_factory=list)
     waivers: list[LineupMove] = Field(default_factory=list)
+    sources: dict[str, str] = Field(default_factory=dict)
+    errors: list[str] = Field(default_factory=list)
+
+
+# ---- waiver wire -----------------------------------------------------------------------
+
+
+class WaiverPlayer(WeekPlayer):
+    """A WeekPlayer with every waiver source joined on. Built per request, never written to disk."""
+    bye_week: int | None = None
+    # FantasyPros rest-of-season consensus
+    ros_rank: int | None = None
+    ros_pos_rank: str | None = None  # "RB24"
+    ros_best: int | None = None
+    ros_worst: int | None = None
+    # FantasyPros weekly waiver-wire panel
+    fp_waiver_rank: int | None = None
+    fp_faab: str | None = None  # the panel's suggested bid, e.g. "$15"
+    fp_note: str | None = None  # the analyst paragraph, HTML stripped
+    fp_waiver_owned: float | None = None  # cross-platform rostered %
+    # Sleeper
+    sleeper_adds: int | None = None
+    sleeper_drops: int | None = None
+    sleeper_injury: str | None = None
+    sleeper_body_part: str | None = None
+    sleeper_practice: str | None = None
+    sleeper_notes: str | None = None
+    depth_chart_order: int | None = None
+    # Rotowire
+    rw_add_pct: float | None = None
+    rw_drop_pct: float | None = None
+    rw_injury: str | None = None
+    rw_status: str | None = None
+    # nflverse
+    snap_pct: float | None = None  # most recent played week, 0-1
+    # engine output
+    protected: bool = False  # keeper or otherwise never a drop
+    add_score: float = 0.0  # 0-100, comparable between free agents and bench players
+    components: dict[str, float] = Field(default_factory=dict)  # component -> 0..1, only those with data
+    missing: list[str] = Field(default_factory=list)  # components no source could fill
+
+
+WaiverTier = Literal["claim", "stash", "watch"]
+
+
+class WaiverPick(BaseModel):
+    tier: WaiverTier
+    player: WaiverPlayer
+    drop: WaiverPlayer | None = None
+    delta: float = 0.0  # add_score(player) - add_score(drop)
+    headline: str
+    why: str  # one paragraph, every sentence backed by a source that loaded
+    sources: list[str] = Field(default_factory=list)  # which sources the paragraph drew on
+
+
+class DropCandidate(BaseModel):
+    player: WaiverPlayer
+    droppability: float  # 100 - add_score
+    why: str
+
+
+class WaiverLink(BaseModel):
+    label: str
+    url: str
+    note: str = ""
+
+
+class WaiverView(BaseModel):
+    season: int
+    week: int
+    week_label: str
+    fetched_at: datetime
+    available: bool = True
+    reason: str = ""
+    faab: bool | None = None
+    faab_budget: int | None = None
+    picks: list[WaiverPick] = Field(default_factory=list)
+    drops: list[DropCandidate] = Field(default_factory=list)  # the whole bench, most droppable first
+    needs: list[str] = Field(default_factory=list)  # roster-fit sentences
+    links: list[WaiverLink] = Field(default_factory=list)
     sources: dict[str, str] = Field(default_factory=dict)
     errors: list[str] = Field(default_factory=list)
 

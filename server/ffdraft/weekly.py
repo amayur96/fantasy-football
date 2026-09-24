@@ -1,6 +1,7 @@
 """Weekly data: my ESPN roster with this week's projections/opponents, free agents, and expert weekly ranks."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -10,21 +11,51 @@ from espn_api.football.constant import PRO_TEAM_MAP
 from .config import Settings
 from .espn.parse import POSITION_BY_ID, SLOT_BY_ID, match_player_by_name, normalize_swid
 from .external import ABBREV_ALIASES, FP_POS, TEAM_ABBREV, UA, fetch_borischen, parse_fantasypros, scoring_format
-from .models import LeagueSettings, Position, WeekPlayer
+from .models import LeagueSettings, Position, UsageWeek, WeekPlayer
 from .store import read_json, write_json
 
 log = logging.getLogger(__name__)
 WEEK_TTL = timedelta(minutes=30)
+USAGE_WEEKS = 3
+# How deep the free-agent pool goes per position. ESPN sorts by roster %, so a flat list of 120
+# fills up with kickers and defenses; asking per slot keeps the deep RB/WR names in view.
+FA_SIZES: dict[str, int] = {"QB": 30, "RB": 60, "WR": 60, "TE": 30, "D/ST": 32}
+FA_RISERS = 50  # one more pull sorted by 7-day roster-share change, so risers deep in the pool show up
+FA_SLOT_IDS: dict[str, int] = {"QB": 0, "RB": 2, "WR": 4, "TE": 6, "D/ST": 16}
 FP_WEEKLY_TTL = timedelta(hours=6)
 FP_WEEK_BASE = "https://www.fantasypros.com/nfl/rankings/{slug}.php"
 
 
 # ---- ESPN --------------------------------------------------------------------------------
 
-def _week_player(p: Any, week: int, pro_sched: dict[int, tuple[int, int]], pos_ratings: dict[str, dict[str, int]], on_my_team: bool) -> WeekPlayer | None:
+def _int(v: Any) -> int | None:
+    try:
+        return int(float(v)) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _usage(p: Any, week: int) -> list[UsageWeek]:
+    """Opportunity in the last few played weeks before `week`, from ESPN's stat breakdown."""
+    stats = getattr(p, "stats", None) or {}
+    out: list[UsageWeek] = []
+    for wk in range(max(1, week - USAGE_WEEKS), week):
+        st = stats.get(wk) or {}
+        br = st.get("breakdown") or {}
+        if not br:
+            continue  # not played (bye, inactive) or not yet fetched
+        out.append(UsageWeek(
+            week=wk, points=st.get("points"), targets=_int(br.get("receivingTargets")), receptions=_int(br.get("receivingReceptions")),
+            carries=_int(br.get("rushingAttempts")), pass_att=_int(br.get("passingAttempts")),
+        ))
+    return out
+
+
+def _week_player(p: Any, week: int, pro_sched: dict[int, tuple[int, int]], pos_ratings: dict[str, dict[str, int]], on_my_team: bool, raw: dict[str, Any] | None = None) -> WeekPlayer | None:
     pos = p.position if p.position in POSITION_BY_ID.values() else None
     if pos is None:
         return None
+    ownership = ((raw or {}).get("player") or {}).get("ownership") or {}
     wk = p.stats.get(week, {}) if hasattr(p, "stats") else {}
     pro_id = next((k for k, v in PRO_TEAM_MAP.items() if v == p.proTeam), 0)
     opp, opp_rank, bye = None, None, False
@@ -49,7 +80,55 @@ def _week_player(p: Any, week: int, pro_sched: dict[int, tuple[int, int]], pos_r
         points=wk.get("points") if wk.get("breakdown") else None, last_points=last.get("points") if last.get("breakdown") else None,
         season_points=season.get("points"), season_avg=float(avg) if avg else None,
         percent_owned=float(getattr(p, "percent_owned", 0) or 0), percent_started=float(getattr(p, "percent_started", 0) or 0), on_my_team=on_my_team,
+        percent_change=float(ownership["percentChange"]) if ownership.get("percentChange") is not None else None,
+        waiver_status=str(raw["status"]) if raw and raw.get("status") else None, usage=_usage(p, week),
     )
+
+
+def _fa_filter(slot_ids: list[int], size: int, week: int, by_change: bool = False) -> dict[str, Any]:
+    sort = {"sortPercChanged": {"sortPriority": 1, "sortAsc": False}} if by_change else {"sortPercOwned": {"sortPriority": 1, "sortAsc": False}}
+    # Without the two stats filters ESPN sends only the season totals and the current week; the
+    # earlier weeks (where the usage trend lives) come back when asked for by scoring period.
+    return {"players": {"filterStatus": {"value": ["FREEAGENT", "WAIVERS"]}, "filterSlotIds": {"value": slot_ids}, "limit": size, **sort,
+                        "sortDraftRanks": {"sortPriority": 100, "sortAsc": True, "value": "STANDARD"},
+                        "filterStatsForSplitTypeIds": {"value": [0, 1]},
+                        "filterStatsForCurrentSeasonScoringPeriodId": {"value": list(range(0, week + 1))}}}
+
+
+def _fetch_free_agents(league: Any, wk: int, pro_sched: dict, ratings: dict, fa_size: int) -> list[WeekPlayer]:
+    """The free-agent pool, pulled per position plus one 'risers' pull, keeping ESPN's raw entry so
+    ownership.percentChange survives (espn_api's Player discards it). Falls back to one flat pull."""
+    from espn_api.football.box_player import BoxPlayer
+
+    def pull(filters: dict[str, Any]) -> list[dict[str, Any]]:
+        data = league.espn_request.league_get(params={"view": "kona_player_info", "scoringPeriodId": wk}, headers={"x-fantasy-filter": json.dumps(filters)})
+        return list(data.get("players", []))
+
+    pulls: list[dict[str, Any]] = [_fa_filter([sid], FA_SIZES[pos], wk) for pos, sid in FA_SLOT_IDS.items()]
+    pulls.append(_fa_filter(list(FA_SLOT_IDS.values()), FA_RISERS, wk, by_change=True))
+    entries: dict[int, dict[str, Any]] = {}
+    failed = 0
+    for f in pulls:
+        try:
+            for e in pull(f):
+                pid = int((e.get("player") or {}).get("id") or e.get("id") or 0)
+                if pid and pid not in entries:
+                    entries[pid] = e
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            log.warning("free agents (%s): %s", f["players"]["filterSlotIds"]["value"], exc)
+    if not entries and failed:
+        entries = {int((e.get("player") or {}).get("id") or 0): e for e in pull(_fa_filter([], fa_size, wk))}
+    out: list[WeekPlayer] = []
+    for e in entries.values():
+        try:
+            wp = _week_player(BoxPlayer(e, pro_sched, ratings, wk, league.year), wk, pro_sched, ratings, False, raw=e)
+        except Exception as exc:  # noqa: BLE001
+            log.debug("free agent entry skipped: %s", exc)
+            continue
+        if wp and wp.position != "K":
+            out.append(wp)
+    return out
 
 
 def fetch_espn_week(cfg: Settings, my_team_id: int, week: int | None = None, season: int | None = None, fa_size: int = 120) -> dict[str, Any]:
@@ -66,10 +145,7 @@ def fetch_espn_week(cfg: Settings, my_team_id: int, week: int | None = None, sea
     roster = [_week_player(p, wk, pro_sched, ratings, True) for p in me.roster]
     fas: list[WeekPlayer] = []
     try:
-        for p in league.free_agents(week=wk, size=fa_size):
-            wp = _week_player(p, wk, pro_sched, ratings, False)
-            if wp:
-                fas.append(wp)
+        fas = _fetch_free_agents(league, wk, pro_sched, ratings, fa_size)
     except Exception as exc:  # noqa: BLE001
         log.warning("free agents: %s", exc)
     opp_name = None

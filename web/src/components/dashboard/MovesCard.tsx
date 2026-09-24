@@ -1,4 +1,5 @@
-import { ArrowLeftRightIcon, TriangleAlertIcon, WavesIcon } from "lucide-react";
+import { Link } from "react-router";
+import { ArrowLeftRightIcon, ArrowRightIcon, TriangleAlertIcon, WavesIcon } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { fmtSigned } from "@/lib/format";
@@ -29,12 +30,13 @@ function MoveBlock({ move }: { move: LineupMove }) {
   );
 }
 
-function Section({ icon, title, moves, empty }: { icon: React.ReactNode; title: string; moves: LineupMove[]; empty: string }) {
+function Section({ icon, title, moves, empty, more }: { icon: React.ReactNode; title: string; moves: LineupMove[]; empty: string; more?: React.ReactNode }) {
   return (
     <section className="space-y-2">
       <h3 className="flex items-center gap-1.5 text-sm font-medium">
         {icon}
         {title}
+        {more && <span className="ml-auto font-normal">{more}</span>}
       </h3>
       {moves.length === 0 ? (
         <p className="text-sm text-muted-foreground">{empty}</p>
@@ -82,6 +84,12 @@ export function MovesCard({ view }: { view: WeekView }) {
             title="Waiver wire"
             moves={view.waivers}
             empty="No clear waiver upgrades right now."
+            more={
+              <Link to="/waivers" className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+                Full waiver wire with drop advice
+                <ArrowRightIcon className="size-3" />
+              </Link>
+            }
           />
         </div>
       </CardContent>

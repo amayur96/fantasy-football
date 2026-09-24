@@ -8,6 +8,7 @@ import { Account } from "@/pages/Account";
 import { Board } from "@/pages/Board";
 import { LiveDraft } from "@/pages/LiveDraft";
 import { Dashboard } from "@/pages/Dashboard";
+import { Waivers } from "@/pages/Waivers";
 import { Keeper } from "@/pages/Keeper";
 import { Login } from "@/pages/Login";
 import { Join } from "@/pages/Join";
@@ -30,6 +31,7 @@ export default function App() {
               <Route element={<RequireTeam />}>
                 <Route element={<AppShell />}>
                 <Route index element={<Dashboard />} />
+                <Route path="waivers" element={<Waivers />} />
                 <Route path="draft" element={<LiveDraft />} />
                 <Route path="draft/board" element={<Board />} />
                 <Route path="draft/keepers" element={<Keeper />} />
